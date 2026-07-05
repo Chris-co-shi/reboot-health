@@ -180,10 +180,26 @@ a {
   gap: 20px;
 }
 
+.plan-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.plan-overview-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .setup-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.compact-actions {
+  margin-top: 14px;
 }
 
 .split-workspace {
@@ -256,6 +272,42 @@ a {
   gap: 6px;
 }
 
+.readonly-summary {
+  display: grid;
+  gap: 8px;
+  color: #435156;
+}
+
+.small-link {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.day-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.day-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.day-fields {
+  width: 100%;
+}
+
+.inline-create {
+  justify-self: start;
+}
+
+.context-tag {
+  margin: 8px 8px 0 0;
+}
+
 @media (max-width: 760px) {
   .app-shell {
     display: block;
@@ -287,6 +339,7 @@ a {
   }
 
   .plan-placeholder,
+  .plan-overview-panel,
   .section-title,
   .form-footer {
     align-items: flex-start;
@@ -294,7 +347,8 @@ a {
   }
 
   .split-workspace,
-  .form-grid {
+  .form-grid,
+  .day-header {
     grid-template-columns: 1fr;
   }
 }

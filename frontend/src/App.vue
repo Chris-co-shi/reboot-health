@@ -50,10 +50,10 @@ function isActive(path: string) {
     <el-container>
       <el-header class="app-header" height="64px">
         <div>
-          <p class="eyebrow">M2A</p>
+          <p class="eyebrow">M2B</p>
           <h1>健康、减脂与体能重建</h1>
         </div>
-        <el-tag type="success" effect="plain">档案与目标管理</el-tag>
+        <el-tag type="success" effect="plain">计划版本管理</el-tag>
       </el-header>
 
       <el-main class="app-main">

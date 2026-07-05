@@ -53,7 +53,7 @@ class M2aApiIntegrationTest {
 
     @BeforeEach
     void cleanTables() {
-        jdbcTemplate.execute("TRUNCATE TABLE audit_log, goal, health_constraint, app_user_profile");
+        jdbcTemplate.execute("TRUNCATE TABLE audit_log, goal, health_constraint, app_user_profile CASCADE");
     }
 
     @Test

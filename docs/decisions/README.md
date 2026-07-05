@@ -10,3 +10,4 @@
 - [0004 Docker 与外部 PostgreSQL 17](0004-windows-docker-postgresql.md)
 - [0005 前端使用 pnpm](0005-frontend-pnpm.md)
 - [0006 Redis 暂不进入 MVP 业务流程](0006-redis-not-in-mvp.md)
+- [0007 计划版本状态和 POST 幂等](0007-plan-version-idempotency.md)

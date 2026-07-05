@@ -206,17 +206,113 @@ Goal：
 - `GOAL_ARCHIVED`
 - `GOAL_INVALID_STATUS_TRANSITION`
 - `GOAL_INVALID_TARGET`
+- `IDEMPOTENCY_KEY_REQUIRED`
+- `IDEMPOTENCY_KEY_INVALID`
+- `IDEMPOTENCY_KEY_REUSED`
+- `PLAN_NOT_FOUND`
+- `PLAN_ALREADY_EXISTS`
+- `PLAN_CURRENT_NOT_FOUND`
+- `PLAN_VERSION_NOT_FOUND`
+- `PLAN_VERSION_NOT_DRAFT`
+- `PLAN_VERSION_IMMUTABLE`
+- `PLAN_VERSION_INVALID_PERIOD`
+- `PLAN_VERSION_INCOMPLETE`
+- `PLAN_VERSION_REVISION_CONFLICT`
+- `PLAN_VERSION_PERIOD_OVERLAP`
+- `PLAN_VERSION_SOURCE_INVALID`
+- `PLAN_DAY_NOT_FOUND`
+- `PLAN_DAY_DATE_OUT_OF_RANGE`
+- `PLAN_ITEM_NOT_FOUND`
+- `PLAN_ITEM_INVALID_VALUE`
 - `ENUM_INVALID`
 - `VALIDATION_ERROR`
 - `DATA_CONFLICT`
 - `AUDIT_WRITE_FAILED`
 - `INTERNAL_ERROR`
 
-## 6. 后续 API 占位
+## 6. M2B REST API
 
-M2A 不实现以下 API：
+必须带 `Idempotency-Key` 的 POST：
 
-- 计划和计划版本。
+- `POST /api/v1/plans`
+- `POST /api/v1/plans/{planId}/versions`
+- `POST /api/v1/plan-versions/{sourceVersionId}/copy`
+- `POST /api/v1/plan-versions/{versionId}/confirm`
+- `POST /api/v1/plan-versions/{versionId}/cancel`
+- `POST /api/v1/plan-versions/{versionId}/days`
+- `POST /api/v1/plan-days/{dayId}/items`
+
+Plan：
+
+```http
+GET /api/v1/plans
+POST /api/v1/plans
+GET /api/v1/plans/current
+GET /api/v1/plans/{planId}
+GET /api/v1/plans/{planId}/versions?status=
+POST /api/v1/plans/{planId}/versions
+```
+
+PlanVersion：
+
+```http
+GET /api/v1/plan-versions/{versionId}
+GET /api/v1/plan-versions/{versionId}/preview
+PUT /api/v1/plan-versions/{versionId}
+POST /api/v1/plan-versions/{versionId}/confirm
+POST /api/v1/plan-versions/{versionId}/cancel
+POST /api/v1/plan-versions/{sourceVersionId}/copy
+```
+
+PlanDay / PlanItem：
+
+```http
+POST /api/v1/plan-versions/{versionId}/days
+PUT /api/v1/plan-days/{dayId}
+DELETE /api/v1/plan-days/{dayId}
+POST /api/v1/plan-days/{dayId}/items
+PUT /api/v1/plan-items/{itemId}
+DELETE /api/v1/plan-items/{itemId}
+```
+
+幂等规则：
+
+- 相同 key、相同 operation、相同规范化 command hash 返回第一次资源结果。
+- 幂等重放不重新执行业务，不重新写审计。
+- 相同 key 但 operation 或请求内容不同返回 `IDEMPOTENCY_KEY_REUSED`。
+- 幂等记录、业务修改和审计处于同一事务。
+
+## 7. M2B 数据库表
+
+新增 Flyway：
+
+- `V3__create_plan_version_tables.sql`
+- `V4__create_idempotency_record.sql`
+
+核心表：
+
+- `plan`：唯一长期计划身份。
+- `plan_version`：7 天计划版本，含 `DRAFT`、`CONFIRMED`、`SUPERSEDED`、`CANCELLED`。
+- `plan_day`：版本内 7 天。
+- `plan_item`：计划日条目。
+- `plan_version_goal`：版本与目标关联。
+- `idempotency_record`：POST 幂等记录。
+
+关键约束：
+
+- `plan.singleton_key` 保证单人应用只有一个长期 Plan。
+- `plan_version.end_date = start_date + 6`。
+- 同一 `plan_id + start_date` 只允许一个 `DRAFT`。
+- 同一 `plan_id + start_date` 只允许一个 `CONFIRMED`。
+- PostgreSQL exclusion constraint 禁止重叠 `CONFIRMED` 周期。
+- `plan_day` 日期由 trigger 保证落在版本周期内。
+- `idempotency_record.idempotency_key` 全局唯一。
+- `idempotency_record.state` 只允许 `PROCESSING`、`COMPLETED`。
+
+## 8. 后续 API 占位
+
+M2B 不实现以下 API：
+
 - 今日执行。
 - 训练记录。
 - 身体指标和症状。

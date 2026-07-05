@@ -69,6 +69,7 @@ Persistence Adapter -> Repository Port
 - AI 适配器不得直接创建生效计划。
 - 计划版本创建必须由领域服务完成。
 - 审计和业务修改必须在同一事务内提交。
+- M2B 的关键 POST 使用 `Idempotency-Key`，幂等记录、业务修改和审计必须同事务提交。
 
 ## 4. 前端架构
 
@@ -108,6 +109,7 @@ Persistence Adapter -> Repository Port
 - Flyway 是唯一数据库结构变更入口。
 - 数据库约束和应用校验互补。
 - 执行记录必须引用计划版本。
+- 当前计划按日期查询 `CONFIRMED` 计划版本，不维护全局 `ACTIVE` 版本状态。
 - 审计记录追加写。
 - AI 原始响应和校验后的结构化结果分开保存。
 

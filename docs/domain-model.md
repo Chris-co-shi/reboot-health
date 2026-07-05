@@ -179,14 +179,78 @@
 - `baselineValue` 必须为空。
 - 允许用标题表达文字目标。
 
-## 6. 后续聚合占位
+## 6. M2B 计划聚合
 
-M2B 以后再实现：
+### Plan
 
-- `Plan`
-- `PlanVersion`
-- `PlanDay`
-- `PlanItem`
+长期计划身份。MVP 只维护一个当前 Plan，周期内容全部由 PlanVersion 表达。
+
+字段：
+
+- `id: UUID`
+- `title: String`
+- `summary: String?`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+
+### PlanVersion
+
+7 天计划周期版本。
+
+状态：
+
+- `DRAFT`：可编辑、可取消、可确认。
+- `CONFIRMED`：已确认，不可修改；可以是历史、当前或未来周期。
+- `SUPERSEDED`：同一日期周期旧确认版本被新确认版本替代，不可修改。
+- `CANCELLED`：已取消草案，不可修改。
+
+规则：
+
+- 不使用 `ACTIVE` 状态。
+- 当前计划通过 `CONFIRMED` 且 `startDate <= currentDate <= endDate` 计算。
+- 每个周期固定 7 天，`endDate = startDate + 6`。
+- `versionNumber` 是同一 Plan 下全局递增版本号。
+- `periodRevision` 是同一 `planId + startDate` 周期内递增修订号。
+- `copiedFromVersionId` 只表示内容复制来源。
+- `supersedesVersionId` 只在同周期修订确认时指向被替代版本。
+- 确认时保存 ACTIVE 健康约束 JSONB 快照。
+
+### PlanDay
+
+计划周期内的一天。
+
+规则：
+
+- 可确认草案必须恰好有 7 个 PlanDay。
+- 日期必须连续、不重复且落在版本周期内。
+- 标题必填。
+- 休息日允许 0 个 PlanItem。
+
+### PlanItem
+
+计划日中的人工计划条目。
+
+类型：
+
+- `BODYWEIGHT`
+- `GYM`
+- `SWIMMING`
+- `BASKETBALL`
+- `RECOVERY`
+- `REST`
+- `OTHER`
+
+规则：
+
+- 不建立复杂动作库。
+- 数值字段不得为负数。
+- RPE 存在时必须在 1 到 10。
+- 可选关联 `Goal`，只能关联 `ACTIVE` 或 `PAUSED` 目标。
+
+## 7. 后续聚合占位
+
+M3 以后再实现：
+
 - `DailyExecution`
 - `TrainingSession`
 - `BodyMetricEntry`
@@ -195,7 +259,7 @@ M2B 以后再实现：
 - `AdjustmentProposal`
 - `AdjustmentDecision`
 
-## 7. OPEN 未确认事项
+## 8. OPEN 未确认事项
 
 - OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
 - OPEN: 是否在 M2A API 中提供审计查询；默认只写入，不提供查询接口。

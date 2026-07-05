@@ -89,11 +89,23 @@ public class GlobalExceptionHandler {
         return switch (code) {
             case PROFILE_NOT_INITIALIZED,
                     HEALTH_CONSTRAINT_NOT_FOUND,
-                    GOAL_NOT_FOUND -> HttpStatus.NOT_FOUND;
+                    GOAL_NOT_FOUND,
+                    PLAN_NOT_FOUND,
+                    PLAN_CURRENT_NOT_FOUND,
+                    PLAN_VERSION_NOT_FOUND,
+                    PLAN_DAY_NOT_FOUND,
+                    PLAN_ITEM_NOT_FOUND -> HttpStatus.NOT_FOUND;
             case HEALTH_CONSTRAINT_ARCHIVED,
                     HEALTH_CONSTRAINT_INVALID_STATUS_TRANSITION,
                     GOAL_ARCHIVED,
                     GOAL_INVALID_STATUS_TRANSITION,
+                    IDEMPOTENCY_KEY_REUSED,
+                    PLAN_ALREADY_EXISTS,
+                    PLAN_VERSION_NOT_DRAFT,
+                    PLAN_VERSION_IMMUTABLE,
+                    PLAN_VERSION_REVISION_CONFLICT,
+                    PLAN_VERSION_PERIOD_OVERLAP,
+                    PLAN_VERSION_SOURCE_INVALID,
                     DATA_CONFLICT -> HttpStatus.CONFLICT;
             default -> HttpStatus.BAD_REQUEST;
         };
