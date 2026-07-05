@@ -36,11 +36,25 @@ public class HealthConstraintApplicationService {
     private final AuditLogAppender auditLogAppender;
     private final Clock clock;
 
+    /**
+     * 查询健康约束列表。
+     *
+     * @param filter 过滤条件，包含状态和是否包含已归档约束
+     * @return 符合条件的约束列表，按创建时间倒序排列
+     */
     @Transactional(readOnly = true)
     public List<HealthConstraint> list(HealthConstraintFilter filter) {
         return repository.findAll(filter);
     }
 
+    /**
+     * 创建新的健康约束。
+     *
+     * <p>新建的约束默认为 ACTIVE 状态，并记录审计日志。</p>
+     *
+     * @param command 包含约束信息的命令对象
+     * @return 创建后的健康约束对象
+     */
     @Transactional
     public HealthConstraint create(SaveHealthConstraintCommand command) {
         Instant now = Instant.now(clock);
@@ -61,6 +75,16 @@ public class HealthConstraintApplicationService {
         return constraint;
     }
 
+    /**
+     * 更新健康约束的业务字段。
+     *
+     * <p>已归档的约束不能编辑，更新前会创建副本用于审计日志。</p>
+     *
+     * @param id 约束 ID
+     * @param command 包含更新数据的命令对象
+     * @return 更新后的健康约束对象
+     * @throws ApplicationException 如果约束不存在或更新冲突
+     */
     @Transactional
     public HealthConstraint update(UUID id, SaveHealthConstraintCommand command) {
         HealthConstraint current = findRequired(id);
@@ -82,6 +106,16 @@ public class HealthConstraintApplicationService {
         return current;
     }
 
+    /**
+     * 变更健康约束的状态。
+     *
+     * <p>不允许直接进入 ARCHIVED 状态，归档必须走 archive 方法。更新前会创建副本用于审计日志。</p>
+     *
+     * @param id 约束 ID
+     * @param targetStatus 目标状态
+     * @return 状态变更后的健康约束对象
+     * @throws ApplicationException 如果约束不存在、状态转换不合法或更新冲突
+     */
     @Transactional
     public HealthConstraint changeStatus(UUID id, ConstraintStatus targetStatus) {
         HealthConstraint current = findRequired(id);
@@ -92,6 +126,16 @@ public class HealthConstraintApplicationService {
         return current;
     }
 
+    /**
+     * 归档健康约束。
+     *
+     * <p>归档是终态操作，必须提供归档原因。更新前会创建副本用于审计日志。</p>
+     *
+     * @param id 约束 ID
+     * @param archiveReason 归档原因，不能为空
+     * @return 归档后的健康约束对象
+     * @throws ApplicationException 如果约束不存在、归档原因为空或更新冲突
+     */
     @Transactional
     public HealthConstraint archive(UUID id, String archiveReason) {
         HealthConstraint current = findRequired(id);
@@ -102,6 +146,13 @@ public class HealthConstraintApplicationService {
         return current;
     }
 
+    /**
+     * 根据 ID 查询约束，不存在则抛出异常。
+     *
+     * @param id 约束 ID
+     * @return 健康约束对象
+     * @throws ApplicationException 如果约束不存在，返回 404
+     */
     private HealthConstraint findRequired(UUID id) {
         return repository.findById(id).orElseThrow(() -> new ApplicationException(
                 ErrorCode.HEALTH_CONSTRAINT_NOT_FOUND,
@@ -110,6 +161,12 @@ public class HealthConstraintApplicationService {
         ));
     }
 
+    /**
+     * 创建约束对象的深拷贝，用于审计日志记录变更前状态。
+     *
+     * @param source 源约束对象
+     * @return 复制后的新约束对象
+     */
     private HealthConstraint copy(HealthConstraint source) {
         return new HealthConstraint(
                 source.getId(),
@@ -130,12 +187,31 @@ public class HealthConstraintApplicationService {
         );
     }
 
+    /**
+     * 断言数据库更新是否成功。
+     *
+     * @param updated 如果为 false 则抛出冲突异常
+     * @throws ApplicationException 如果更新失败，表示存在并发冲突
+     */
     private void assertUpdated(boolean updated) {
         if (!updated) {
             throw new ApplicationException(ErrorCode.DATA_CONFLICT, "健康约束更新冲突，请刷新后重试", HttpStatus.CONFLICT);
         }
     }
 
+    /**
+     * 保存健康约束的命令对象。
+     *
+     * @param constraintType 约束类型
+     * @param bodyRegion 身体部位
+     * @param severity 严重程度
+     * @param title 约束标题
+     * @param description 详细描述
+     * @param sourceType 来源类型
+     * @param sourceNote 来源备注
+     * @param effectiveFrom 生效开始日期
+     * @param effectiveTo 生效结束日期
+     */
     public record SaveHealthConstraintCommand(
             ConstraintType constraintType,
             BodyRegion bodyRegion,

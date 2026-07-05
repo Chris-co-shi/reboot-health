@@ -17,6 +17,14 @@ public final class HealthConstraintPersistenceConverter {
     private HealthConstraintPersistenceConverter() {
     }
 
+    /**
+     * 将领域对象转换为持久化对象。
+     *
+     * <p>所有枚举字段使用 name() 方法转换为字符串，确保数据库存储的稳定性。</p>
+     *
+     * @param constraint 领域层的健康约束对象
+     * @return 持久化层的数据对象
+     */
     public static HealthConstraintDataObject toDataObject(HealthConstraint constraint) {
         return new HealthConstraintDataObject(
                 constraint.getId(),
@@ -37,6 +45,14 @@ public final class HealthConstraintPersistenceConverter {
         );
     }
 
+    /**
+     * 将持久化对象转换为领域对象。
+     *
+     * <p>所有枚举字段使用 valueOf() 方法从字符串还原，null 值直接返回 null。</p>
+     *
+     * @param dataObject 持久化层的数据对象
+     * @return 领域层的健康约束对象，若输入为 null 则返回 null
+     */
     public static HealthConstraint toDomain(HealthConstraintDataObject dataObject) {
         if (dataObject == null) {
             return null;
