@@ -1,0 +1,18 @@
+.DS_Store
+
+# Local environment
+.env
+deploy/.env
+
+# Java / Maven
+backend/target/
+
+# Node / pnpm
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.iml
