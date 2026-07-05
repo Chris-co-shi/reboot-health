@@ -7,226 +7,238 @@
 - 历史执行记录是事实，不能随计划版本变化。
 - AI 输出是建议，不是领域事实。
 - 医疗相关内容只作为约束、提醒和风险信息，不生成诊断结论。
+- MVP 不为简单字段创建无业务行为的包装类；ID 使用 `UUID`，数值使用 `BigDecimal`，名称和标题使用 `String`。
 
-## 2. 核心聚合
+## 2. M2A 聚合
 
 ### UserProfile
 
-个人档案聚合，保存用户基础信息和当前健康管理上下文。
+个人档案聚合，保存单人应用的基础健康档案。
 
-职责：
+字段：
 
-- 保存基础档案。
-- 关联健康约束。
-- 关联目标。
+- `id: UUID`
+- `displayName: String`
+- `sex: Sex`
+- `birthDate: LocalDate`
+- `heightCm: BigDecimal`
+- `baselineWeightKg: BigDecimal?`
+- `timezone: String`
+- `createdAt: Instant`
+- `updatedAt: Instant`
 
-不负责：
+语义：
 
-- 不直接生成计划。
-- 不执行训练调整。
+- 单人应用只允许一个当前档案。
+- `baselineWeightKg` 只表示首次建立健康档案时的基线体重，可为空。
+- 不保存 `currentWeightKg`。
+- M3 后当前体重必须从最新 `BodyMetricEntry` 查询。
+- 业务页面不得把 `baselineWeightKg` 展示为实时当前体重。
 
 ### HealthConstraint
 
-健康约束聚合，表达高血压、颈椎、肩颈、髋、腰、足底、跟腱等限制。
+健康约束聚合，表达高血压、颈椎、肩颈、髋、腰、足底、跟腱、禁止动作和训练注意事项等限制。
 
-职责：
+字段：
 
-- 作为规则引擎和 AI 上下文的强约束输入。
-- 记录约束来源、严重程度、状态。
+- `id: UUID`
+- `constraintType: ConstraintType`
+- `bodyRegion: BodyRegion`
+- `severity: ConstraintSeverity`
+- `title: String`
+- `description: String`
+- `sourceType: ConstraintSourceType`
+- `sourceNote: String?`
+- `status: ConstraintStatus`
+- `effectiveFrom: LocalDate?`
+- `effectiveTo: LocalDate?`
+- `archiveReason: String?`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+- `archivedAt: Instant?`
 
 关键规则：
 
 - AI 不能删除健康约束。
 - AI 不能停用健康约束。
+- M2A 允许用户手动创建、修改、停用和归档。
+- 归档不物理删除。
+- 归档后禁止普通编辑和状态变更。
+- 不存储由系统推断出的医学诊断结论。
 
 ### Goal
 
-目标聚合，表达体重、体能、训练习惯等目标。
+目标聚合，表达体重、腰围、训练习惯、有氧能力、力量、游泳、篮球体能和睡眠等目标。
 
-职责：
+字段：
 
-- 保存目标值、目标类型、状态。
-- 为计划生成和周分析提供方向。
-
-### Plan
-
-计划主体聚合，承载一组计划版本。
-
-职责：
-
-- 组织计划版本。
-- 保证同一计划只有一个生效版本。
-
-### PlanVersion
-
-计划版本聚合，是计划变更的核心边界。
-
-职责：
-
-- 保存某一版一周计划。
-- 表达草案、生效、归档等状态。
-- 记录来源：用户创建、AI 起草、用户确认 AI 调整。
+- `id: UUID`
+- `goalType: GoalType`
+- `title: String`
+- `targetValue: BigDecimal?`
+- `unit: GoalUnit`
+- `baselineValue: BigDecimal?`
+- `targetDate: LocalDate?`
+- `status: GoalStatus`
+- `priority: Integer`
+- `archiveReason: String?`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+- `archivedAt: Instant?`
 
 关键规则：
 
-- 生效版本不可原地修改。
-- 调整必须创建新版本。
-- 新版本必须保留来源版本。
+- 目标不是计划任务。
+- 目标不直接包含每日训练动作。
+- 已完成或已取消的目标不恢复为进行中；如需重新开始，应创建新目标。
+- 归档不物理删除。
 
-### DailyExecution
+## 3. 枚举
 
-每日执行聚合，记录某一天对当时计划版本的执行事实。
+`Sex`：
 
-职责：
+- `MALE`
+- `FEMALE`
+- `OTHER`
+- `UNSPECIFIED`
 
-- 保存每日计划完成情况。
-- 汇总睡眠、疲劳、精力、饮食执行等日级状态。
-- 关联训练记录和身体指标。
+`ConstraintType`：
 
-关键规则：
+- `HYPERTENSION`
+- `CERVICAL_LIMITATION`
+- `SHOULDER_NECK_DISCOMFORT`
+- `LOWER_BACK_STRAIN`
+- `HIP_MOBILITY_LIMITATION`
+- `FOOT_SOLE_ISSUE`
+- `ACHILLES_DISCOMFORT`
+- `FORBIDDEN_MOVEMENT`
+- `TRAINING_PRECAUTION`
+- `OTHER`
 
-- 必须引用当时的 `plan_version_id`。
-- 不随新计划版本变化。
+`BodyRegion`：
 
-### TrainingSession
+- `CARDIOVASCULAR`
+- `CERVICAL_SPINE`
+- `SHOULDER_NECK`
+- `LOWER_BACK`
+- `HIP`
+- `FOOT_SOLE`
+- `ACHILLES_TENDON`
+- `FULL_BODY`
+- `OTHER`
 
-训练记录聚合，记录徒手、健身房、游泳、篮球等训练事实。
+`ConstraintSeverity`：
 
-职责：
+- `INFO`
+- `LOW`
+- `MEDIUM`
+- `HIGH`
+- `CRITICAL`
 
-- 保存训练类型、时长、RPE、疼痛评分。
-- 保存项目特有详情。
+`ConstraintSourceType`：
 
-### BodyMetricEntry
+- `USER_REPORTED`
+- `DOCTOR_ADVICE`
+- `MEDICAL_REPORT`
+- `MEASUREMENT`
+- `OTHER`
 
-身体指标记录聚合。
+`ConstraintStatus`：
 
-职责：
+- `ACTIVE`
+- `INACTIVE`
+- `RESOLVED`
+- `ARCHIVED`
 
-- 记录体重、腰围、血压、静息心率。
-- 支持趋势分析。
+`GoalType`：
 
-### SymptomEntry
+- `WEIGHT`
+- `WAIST`
+- `TRAINING_HABIT`
+- `AEROBIC_CAPACITY`
+- `STRENGTH`
+- `SWIMMING`
+- `BASKETBALL_CONDITIONING`
+- `SLEEP`
+- `OTHER`
 
-症状和主观不适记录聚合。
+`GoalStatus`：
 
-职责：
+- `ACTIVE`
+- `PAUSED`
+- `COMPLETED`
+- `CANCELLED`
+- `ARCHIVED`
 
-- 记录部位、疼痛评分、不适评分、触发因素和备注。
-- 为安全规则提供依据。
+`GoalUnit`：
 
-### WeeklyAnalysis
+- `KG`
+- `CM`
+- `SESSIONS_PER_WEEK`
+- `MINUTES`
+- `MINUTES_PER_DAY`
+- `METERS`
+- `LAPS`
+- `SCORE`
+- `PERCENT`
+- `NONE`
 
-周期分析聚合。
+## 4. 状态流转
 
-职责：
+### HealthConstraint
 
-- 保存 7 天周期统计快照。
-- 汇总完成率、体重、血压、睡眠、疲劳、疼痛、训练负荷。
-- 作为 AI 调整建议的输入之一。
+| 当前状态 | 允许目标状态 |
+|---|---|
+| ACTIVE | INACTIVE, RESOLVED, ARCHIVED |
+| INACTIVE | ACTIVE, RESOLVED, ARCHIVED |
+| RESOLVED | ARCHIVED |
+| ARCHIVED | 无 |
 
-### AdjustmentProposal
+状态语义：
 
-AI 调整建议聚合。
+- `ACTIVE`：当前有效，必须进入后续规则引擎和 AI 当前上下文。
+- `INACTIVE`：用户暂时停用，不参与规则判断；可作为历史信息进入 AI 上下文，但必须明确标记为非当前约束。
+- `RESOLVED`：问题已解决或医生确认不再需要当前限制，不参与规则判断；M2A 不允许重新激活。
+- `ARCHIVED`：用户主动归档，默认列表不显示，不参与规则和 AI 当前上下文，禁止普通编辑和状态变更，M2A 不实现恢复。
 
-职责：
+### Goal
 
-- 保存 AI 原始响应。
-- 保存 JSON Schema 校验后的结构化建议。
-- 记录规则校验结果。
+| 当前状态 | 允许目标状态 |
+|---|---|
+| ACTIVE | PAUSED, COMPLETED, CANCELLED, ARCHIVED |
+| PAUSED | ACTIVE, COMPLETED, CANCELLED, ARCHIVED |
+| COMPLETED | ARCHIVED |
+| CANCELLED | ARCHIVED |
+| ARCHIVED | 无 |
 
-关键规则：
+状态语义：
 
-- 未通过 Schema 校验不得进入领域应用流程。
-- 被规则阻断的建议项不可应用。
+- `ACTIVE`：正在执行。
+- `PAUSED`：暂停执行，未来可以恢复。
+- `COMPLETED`：已完成，终态。
+- `CANCELLED`：已取消，终态。
+- `ARCHIVED`：隐藏保留，终态。
 
-### AdjustmentDecision
+## 5. 后续聚合占位
 
-用户确认聚合。
+M2B 以后再实现：
 
-职责：
-
-- 记录全部接受、部分接受或拒绝。
-- 记录接受项和拒绝项。
-- 关联新生成的计划版本。
-
-### AuditLog
-
-审计记录聚合。
-
-职责：
-
-- 记录关键状态转换。
-- 记录调整前后差异。
-- 支持回溯计划版本变化原因。
-
-## 3. 领域事件草案
-
-- `PlanDraftCreated`
-- `PlanVersionActivated`
-- `DailyLogSubmitted`
-- `WeeklyAnalysisGenerated`
-- `AdjustmentProposalCreated`
-- `AdjustmentProposalValidated`
-- `AdjustmentDecisionSubmitted`
-- `PlanVersionCreatedFromAdjustment`
-- `SafetyRuleBlockedAdjustment`
-
-## 4. 聚合关系
-
-```text
-UserProfile
-  -> HealthConstraint
-  -> Goal
-  -> Plan
-       -> PlanVersion
-            -> PlanDay
-                 -> PlanItem
-
-PlanVersion
-  -> DailyExecution
-       -> TrainingSession
-       -> BodyMetricEntry
-       -> SymptomEntry
-
-WeeklyAnalysis
-  -> RuleEvaluation
-  -> AdjustmentProposal
-       -> AdjustmentProposalItem
-       -> AdjustmentDecision
-            -> PlanVersion
-```
-
-## 5. 状态流转
-
-计划版本：
-
-```text
-DRAFT -> ACTIVE -> ARCHIVED
-DRAFT -> REJECTED
-```
-
-调整建议：
-
-```text
-CREATED -> SCHEMA_VALIDATED -> RULE_CHECKED -> PENDING_USER_DECISION
-PENDING_USER_DECISION -> ACCEPTED
-PENDING_USER_DECISION -> PARTIALLY_ACCEPTED
-PENDING_USER_DECISION -> REJECTED
-```
-
-规则结果：
-
-```text
-ALLOW
-WARN
-BLOCK
-```
+- `Plan`
+- `PlanVersion`
+- `PlanDay`
+- `PlanItem`
+- `DailyExecution`
+- `TrainingSession`
+- `BodyMetricEntry`
+- `SymptomEntry`
+- `WeeklyAnalysis`
+- `AdjustmentProposal`
+- `AdjustmentDecision`
 
 ## 6. OPEN 未确认事项
 
-- OPEN: 计划版本是否只支持 7 天周期，还是数据库层预留更长周期字段。
-- OPEN: 训练动作是否在 MVP 阶段建立动作字典，还是仅保存自由文本。
-- OPEN: 疼痛部位枚举是否先固定，还是允许用户自定义。
-- OPEN: 周分析是否允许用户手动触发重算。
-- OPEN: 审计记录保留策略是否永久保留。
+- OPEN: `goalType = OTHER` 且 `unit = NONE` 时是否允许只填写文字目标说明。
+- OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
+- OPEN: 是否在 M2A API 中提供审计查询；默认只写入，不提供查询接口。
+- OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
+- OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。

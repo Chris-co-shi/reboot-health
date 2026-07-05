@@ -1,0 +1,14 @@
+package com.indigobyte.reboothealth.profile.domain;
+
+public enum ConstraintType {
+    HYPERTENSION,
+    CERVICAL_LIMITATION,
+    SHOULDER_NECK_DISCOMFORT,
+    LOWER_BACK_STRAIN,
+    HIP_MOBILITY_LIMITATION,
+    FOOT_SOLE_ISSUE,
+    ACHILLES_DISCOMFORT,
+    FORBIDDEN_MOVEMENT,
+    TRAINING_PRECAUTION,
+    OTHER
+}

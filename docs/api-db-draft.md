@@ -1,412 +1,203 @@
 # API 与数据库草案
 
-本文档用于指导后续实现。M1 不创建业务迁移，不实现业务接口。
+本文档随里程碑持续更新。当前实现目标为 M2A：用户档案、健康约束、目标管理。
 
-## 1. API 草案
+## 1. M2A REST API
 
-### 档案与目标
+### UserProfile
 
 ```http
 GET /api/v1/profile
 PUT /api/v1/profile
-GET /api/v1/health-constraints
+```
+
+规则：
+
+- 单人应用只保存一个当前档案。
+- `GET` 未初始化时返回 `PROFILE_NOT_INITIALIZED`。
+- `PUT` 首次保存时创建档案，之后更新同一条档案。
+- 请求内容与当前数据完全一致时视为幂等无变化，不重复写业务记录，不写 `NO_CHANGE` 审计。
+
+### HealthConstraint
+
+```http
+GET /api/v1/health-constraints?status=&includeArchived=false
 POST /api/v1/health-constraints
 PUT /api/v1/health-constraints/{id}
-GET /api/v1/goals
+PATCH /api/v1/health-constraints/{id}/status
+POST /api/v1/health-constraints/{id}/archive
+```
+
+规则：
+
+- 默认不返回 `ARCHIVED`。
+- 归档必须提供 `archiveReason`。
+- 已归档约束禁止普通编辑和状态变更。
+- Repository 不提供业务语义的 `archive` 方法；应用服务完成状态变化后调用 `save`。
+
+### Goal
+
+```http
+GET /api/v1/goals?status=&includeArchived=false
 POST /api/v1/goals
+PUT /api/v1/goals/{id}
+PATCH /api/v1/goals/{id}/status
+POST /api/v1/goals/{id}/archive
 ```
 
-### 计划
+规则：
 
-```http
-POST /api/v1/plans/draft-from-ai
-GET /api/v1/plans/current
-GET /api/v1/plans/{planId}/versions
-GET /api/v1/plan-versions/{versionId}
-POST /api/v1/plan-versions/{versionId}/activate
-```
+- 默认不返回 `ARCHIVED`。
+- `targetDate` 可选。
+- 已完成或已取消的目标如需重新开始，应创建新目标。
+- 已归档目标禁止普通编辑和状态变更。
 
-约束：
+## 2. M2A 数据库表
 
-- `draft-from-ai` 只创建草案，不激活。
-- `activate` 必须由用户操作触发。
-- 一个计划同一时间只能有一个生效版本。
+所有时间戳由应用统一产生。Java 类型映射：
 
-### 今日与执行
+- `DATE -> LocalDate`
+- `TIMESTAMPTZ -> Instant`
 
-```http
-GET /api/v1/today?date=YYYY-MM-DD
-POST /api/v1/daily-logs
-PATCH /api/v1/plan-items/{planItemId}/completion
-POST /api/v1/training-sessions
-POST /api/v1/body-metrics
-POST /api/v1/symptoms
-```
-
-约束：
-
-- 执行记录必须保存 `plan_version_id`。
-- 历史记录不得随计划版本变化。
-
-### 分析与调整
-
-```http
-POST /api/v1/analyses/weekly
-GET /api/v1/analyses/{analysisId}
-POST /api/v1/adjustment-proposals
-GET /api/v1/adjustment-proposals/{proposalId}
-POST /api/v1/adjustment-proposals/{proposalId}/decisions
-GET /api/v1/audit-logs
-```
-
-约束：
-
-- `adjustment-proposals` 必须经过 JSON Schema 校验。
-- `decisions` 支持全部接受、部分接受、拒绝。
-- 只有接受项能生成新计划版本。
-
-## 2. 数据库核心表草案
+禁止使用 `LocalDateTime` 表达审计时间。
 
 ### app_user_profile
 
-个人档案。单人应用仍保留主键，方便外键和后续数据导出。
-
-字段：
-
-- `id`
-- `sex`
-- `birth_year`
-- `height_cm`
-- `notes`
-- `created_at`
-- `updated_at`
+```sql
+CREATE TABLE app_user_profile (
+    id UUID PRIMARY KEY,
+    singleton_key SMALLINT NOT NULL DEFAULT 1 CHECK (singleton_key = 1),
+    display_name VARCHAR(60) NOT NULL,
+    sex VARCHAR(32) NOT NULL,
+    birth_date DATE,
+    height_cm NUMERIC(5,2),
+    baseline_weight_kg NUMERIC(6,2),
+    timezone VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT uk_app_user_profile_singleton UNIQUE (singleton_key)
+);
+```
 
 ### health_constraint
 
-健康约束和运动限制。
-
-字段：
-
-- `id`
-- `profile_id`
-- `constraint_type`
-- `body_area`
-- `severity`
-- `description`
-- `source`
-- `active`
-- `created_at`
-- `updated_at`
-
-约束：
-
-- AI 不能删除或停用健康约束。
+```sql
+CREATE TABLE health_constraint (
+    id UUID PRIMARY KEY,
+    constraint_type VARCHAR(64) NOT NULL,
+    body_region VARCHAR(64) NOT NULL,
+    severity VARCHAR(32) NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    description TEXT,
+    source_type VARCHAR(64) NOT NULL,
+    source_note VARCHAR(1000),
+    status VARCHAR(32) NOT NULL,
+    effective_from DATE,
+    effective_to DATE,
+    archive_reason VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    archived_at TIMESTAMPTZ,
+    CONSTRAINT ck_health_constraint_effective_range
+        CHECK (effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from)
+);
+```
 
 ### goal
 
-目标管理。
-
-字段：
-
-- `id`
-- `profile_id`
-- `goal_type`
-- `target_value`
-- `target_unit`
-- `target_date`
-- `status`
-- `created_at`
-- `updated_at`
-
-### plan
-
-计划主体。
-
-字段：
-
-- `id`
-- `profile_id`
-- `name`
-- `status`
-- `created_at`
-- `updated_at`
-
-### plan_version
-
-计划版本。
-
-字段：
-
-- `id`
-- `plan_id`
-- `version_no`
-- `status`
-- `source`
-- `created_from_version_id`
-- `summary`
-- `created_at`
-- `activated_at`
-
-约束：
-
-- 同一 `plan_id` 只能有一个 `ACTIVE` 版本。
-- `ACTIVE` 版本不可原地修改。
-
-### plan_day
-
-计划中的某一天。
-
-字段：
-
-- `id`
-- `plan_version_id`
-- `day_index`
-- `planned_date`
-- `focus`
-- `notes`
-
-### plan_item
-
-计划任务。
-
-字段：
-
-- `id`
-- `plan_day_id`
-- `item_type`
-- `title`
-- `target_json`
-- `safety_tags`
-- `sort_order`
-
-### daily_log
-
-每日执行摘要。
-
-字段：
-
-- `id`
-- `profile_id`
-- `plan_version_id`
-- `log_date`
-- `sleep_minutes`
-- `fatigue_score`
-- `energy_score`
-- `diet_adherence_score`
-- `notes`
-- `created_at`
-- `updated_at`
-
-约束：
-
-- 同一 `profile_id` + `log_date` 只能有一条记录。
-
-### body_metric_entry
-
-身体指标记录。
-
-字段：
-
-- `id`
-- `profile_id`
-- `measured_at`
-- `weight_kg`
-- `waist_cm`
-- `systolic_bp`
-- `diastolic_bp`
-- `resting_hr`
-- `notes`
-
-### symptom_entry
-
-疼痛或不适记录。
-
-字段：
-
-- `id`
-- `profile_id`
-- `recorded_at`
-- `body_area`
-- `pain_score`
-- `discomfort_score`
-- `description`
-- `trigger`
-
-### training_session
-
-训练记录。
-
-字段：
-
-- `id`
-- `profile_id`
-- `daily_log_id`
-- `plan_item_id`
-- `session_type`
-- `started_at`
-- `duration_minutes`
-- `rpe`
-- `pain_score`
-- `details_json`
-- `notes`
-
-### training_set_record
-
-力量训练组记录。
-
-字段：
-
-- `id`
-- `training_session_id`
-- `exercise_name`
-- `set_index`
-- `reps`
-- `weight_kg`
-- `duration_seconds`
-- `distance_meters`
-- `rpe`
-- `pain_score`
-
-### weekly_analysis
-
-周期分析。
-
-字段：
-
-- `id`
-- `profile_id`
-- `plan_version_id`
-- `period_start`
-- `period_end`
-- `summary_json`
-- `created_at`
-
-### rule_evaluation
-
-规则评估结果。
-
-字段：
-
-- `id`
-- `profile_id`
-- `analysis_id`
-- `rule_code`
-- `decision`
-- `severity`
-- `evidence_json`
-- `message`
-- `created_at`
-
-### adjustment_proposal
-
-AI 调整建议。
-
-字段：
-
-- `id`
-- `profile_id`
-- `analysis_id`
-- `plan_version_id`
-- `schema_version`
-- `status`
-- `raw_response`
-- `validated_json`
-- `created_at`
-
-### adjustment_proposal_item
-
-建议项。
-
-字段：
-
-- `id`
-- `proposal_id`
-- `domain`
-- `change_type`
-- `target_ref`
-- `before_json`
-- `after_json`
-- `rationale`
-- `risks_json`
-- `evidence_refs_json`
-- `safety_rule_refs_json`
-- `status`
-
-### adjustment_decision
-
-用户确认结果。
-
-字段：
-
-- `id`
-- `proposal_id`
-- `decision_type`
-- `accepted_item_ids`
-- `rejected_item_ids`
-- `created_plan_version_id`
-- `notes`
-- `created_at`
+```sql
+CREATE TABLE goal (
+    id UUID PRIMARY KEY,
+    goal_type VARCHAR(64) NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    target_value NUMERIC(12,3),
+    unit VARCHAR(32) NOT NULL,
+    baseline_value NUMERIC(12,3),
+    target_date DATE,
+    status VARCHAR(32) NOT NULL,
+    priority INTEGER NOT NULL,
+    archive_reason VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    archived_at TIMESTAMPTZ
+);
+```
 
 ### audit_log
 
-审计记录。
-
-字段：
-
-- `id`
-- `actor`
-- `action`
-- `entity_type`
-- `entity_id`
-- `before_json`
-- `after_json`
-- `created_at`
-
-## 3. AI 建议 JSON 草案
-
-```json
-{
-  "schemaVersion": "1.0",
-  "period": {
-    "start": "2026-07-01",
-    "end": "2026-07-07"
-  },
-  "summary": "本周完成率偏低，建议降低复杂度并保持游泳适应训练。",
-  "overallRiskLevel": "LOW",
-  "items": [
-    {
-      "domain": "TRAINING",
-      "changeType": "REDUCE_COMPLEXITY",
-      "targetRef": {
-        "type": "PLAN_ITEM",
-        "id": "placeholder"
-      },
-      "before": {},
-      "after": {},
-      "rationale": "过去一周完成率不足，先降低复杂度。",
-      "evidenceRefs": [],
-      "risks": [],
-      "safetyRuleRefs": []
-    }
-  ]
-}
+```sql
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY,
+    actor VARCHAR(64) NOT NULL,
+    action VARCHAR(64) NOT NULL,
+    entity_type VARCHAR(64) NOT NULL,
+    entity_id UUID NOT NULL,
+    before_snapshot JSONB,
+    after_snapshot JSONB,
+    created_at TIMESTAMPTZ NOT NULL
+);
 ```
 
-## 4. 规则引擎输出草案
+审计表只追加，不提供更新和删除业务接口。
 
-```json
-{
-  "ruleCode": "SLEEP_LOW_BLOCK_VOLUME_INCREASE",
-  "decision": "BLOCK",
-  "severity": "HIGH",
-  "message": "连续睡眠不足时禁止升级训练量。",
-  "evidence": {
-    "days": 3,
-    "sleepMinutesAverage": 330
-  },
-  "blockedAdjustmentTypes": [
-    "INCREASE_VOLUME",
-    "INCREASE_INTENSITY"
-  ]
-}
-```
+## 3. DTO 校验
+
+UserProfile：
+
+- `displayName`：1-60。
+- `birthDate`：不得晚于今天。
+- `heightCm`：100-250，可为空。
+- `baselineWeightKg`：30-300，可为空。
+- `timezone`：合法 IANA 时区。
+
+HealthConstraint：
+
+- `title`：1-100。
+- `description`：最长 2000。
+- `sourceNote`：最长 1000。
+- `archiveReason`：归档时必填，1-300。
+- `effectiveTo` 不早于 `effectiveFrom`。
+- 枚举值必须合法。
+
+Goal：
+
+- `title`：1-100。
+- `targetValue`、`baselineValue` 必须 `>= 0`。
+- `targetDate` 可选。
+- `priority`：1-5。
+- `WEIGHT` 默认使用 `KG`。
+- `WAIST` 默认使用 `CM`。
+- `TRAINING_HABIT` 默认使用 `SESSIONS_PER_WEEK`。
+- `SWIMMING` 可使用 `METERS` 或 `LAPS`。
+- `SLEEP` 可使用 `MINUTES` 或 `MINUTES_PER_DAY`。
+- `unit = NONE` 时，`targetValue` 和 `baselineValue` 应为空。
+- 不合法组合返回 `GOAL_INVALID_TARGET`。
+- 不自动修正单位。
+
+## 4. 错误码
+
+- `PROFILE_NOT_INITIALIZED`
+- `PROFILE_VALIDATION_FAILED`
+- `HEALTH_CONSTRAINT_NOT_FOUND`
+- `HEALTH_CONSTRAINT_ARCHIVED`
+- `HEALTH_CONSTRAINT_INVALID_STATUS_TRANSITION`
+- `HEALTH_CONSTRAINT_INVALID_DATE_RANGE`
+- `GOAL_NOT_FOUND`
+- `GOAL_ARCHIVED`
+- `GOAL_INVALID_STATUS_TRANSITION`
+- `GOAL_INVALID_TARGET`
+- `ENUM_INVALID`
+- `VALIDATION_ERROR`
+- `DATA_CONFLICT`
+- `AUDIT_WRITE_FAILED`
+
+## 5. 后续 API 占位
+
+M2A 不实现以下 API：
+
+- 计划和计划版本。
+- 今日执行。
+- 训练记录。
+- 身体指标和症状。
+- 周分析。
+- AI 调整建议。

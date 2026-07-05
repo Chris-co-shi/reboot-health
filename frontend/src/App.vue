@@ -17,6 +17,10 @@ const navItems = [
   { path: '/trends', label: '趋势分析', icon: TrendCharts },
   { path: '/adjustments', label: '调整确认', icon: DataAnalysis },
 ];
+
+function isActive(path: string) {
+  return route.path === path || (path === '/plan' && route.path.startsWith('/plan/'));
+}
 </script>
 
 <template>
@@ -34,7 +38,7 @@ const navItems = [
         <RouterLink
           v-for="item in navItems"
           :key="item.path"
-          :class="['nav-item', { active: route.path === item.path }]"
+          :class="['nav-item', { active: isActive(item.path) }]"
           :to="item.path"
         >
           <el-icon><component :is="item.icon" /></el-icon>
@@ -46,10 +50,10 @@ const navItems = [
     <el-container>
       <el-header class="app-header" height="64px">
         <div>
-          <p class="eyebrow">M1 骨架</p>
+          <p class="eyebrow">M2A</p>
           <h1>健康、减脂与体能重建</h1>
         </div>
-        <el-tag type="info" effect="plain">业务功能待实现</el-tag>
+        <el-tag type="success" effect="plain">档案与目标管理</el-tag>
       </el-header>
 
       <el-main class="app-main">
