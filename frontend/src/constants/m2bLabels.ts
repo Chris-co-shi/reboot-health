@@ -15,6 +15,9 @@ export const planItemTypeLabels: Record<PlanItemType, string> = {
   BASKETBALL: '篮球',
   RECOVERY: '恢复',
   REST: '休息',
+  CARDIO: '有氧',
+  NUTRITION: '饮食',
+  MEASUREMENT: '测量',
   OTHER: '其他',
 };
 
@@ -25,5 +28,8 @@ export const planItemTypeOptions: Array<SelectOption<PlanItemType>> = [
   { label: planItemTypeLabels.BASKETBALL, value: 'BASKETBALL' },
   { label: planItemTypeLabels.RECOVERY, value: 'RECOVERY' },
   { label: planItemTypeLabels.REST, value: 'REST' },
+  { label: planItemTypeLabels.CARDIO, value: 'CARDIO' },
+  { label: planItemTypeLabels.NUTRITION, value: 'NUTRITION' },
+  { label: planItemTypeLabels.MEASUREMENT, value: 'MEASUREMENT' },
   { label: planItemTypeLabels.OTHER, value: 'OTHER' },
 ];

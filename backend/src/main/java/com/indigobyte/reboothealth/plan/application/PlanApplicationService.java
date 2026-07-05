@@ -1,11 +1,13 @@
 package com.indigobyte.reboothealth.plan.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.indigobyte.reboothealth.audit.application.AuditLogAppender;
 import com.indigobyte.reboothealth.error.ApplicationException;
 import com.indigobyte.reboothealth.error.DomainException;
 import com.indigobyte.reboothealth.error.ErrorCode;
+import com.indigobyte.reboothealth.goal.domain.Goal;
 import com.indigobyte.reboothealth.goal.domain.GoalRepository;
 import com.indigobyte.reboothealth.goal.domain.GoalStatus;
 import com.indigobyte.reboothealth.idempotency.application.IdempotencyApplicationService;
@@ -14,12 +16,15 @@ import com.indigobyte.reboothealth.idempotency.domain.IdempotencyState;
 import com.indigobyte.reboothealth.plan.domain.Plan;
 import com.indigobyte.reboothealth.plan.domain.PlanDay;
 import com.indigobyte.reboothealth.plan.domain.PlanDayDetail;
+import com.indigobyte.reboothealth.plan.domain.GoalSummarySnapshot;
+import com.indigobyte.reboothealth.plan.domain.HealthConstraintSnapshot;
 import com.indigobyte.reboothealth.plan.domain.PlanItem;
 import com.indigobyte.reboothealth.plan.domain.PlanItemType;
 import com.indigobyte.reboothealth.plan.domain.PlanRepository;
 import com.indigobyte.reboothealth.plan.domain.PlanVersion;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionDetail;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionFilter;
+import com.indigobyte.reboothealth.plan.domain.PlanVersionPreview;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionStatus;
 import com.indigobyte.reboothealth.profile.domain.ConstraintStatus;
 import com.indigobyte.reboothealth.profile.domain.HealthConstraintFilter;
@@ -29,8 +34,6 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -113,6 +116,15 @@ public class PlanApplicationService {
         return detail(findVersion(versionId));
     }
 
+    @Transactional(readOnly = true)
+    public PlanVersionPreview preview(UUID versionId) {
+        PlanVersion version = findVersion(versionId);
+        PlanVersionDetail detail = detail(version);
+        List<String> validationIssues = collectValidationIssues(version);
+        boolean canConfirm = version.getStatus() == PlanVersionStatus.DRAFT && validationIssues.isEmpty();
+        return new PlanVersionPreview(detail, detail.goals(), detail.healthConstraints(), validationIssues, canConfirm);
+    }
+
     @Transactional
     public IdempotentResult<PlanVersionDetail> createDraft(String idempotencyKey, UUID planId, CreateDraftCommand command) {
         return executeVersionIdempotent(idempotencyKey, "PLAN_VERSION_DRAFT_CREATE", Map.of("planId", planId), command,
@@ -190,13 +202,20 @@ public class PlanApplicationService {
     }
 
     @Transactional
-    public IdempotentResult<PlanVersionDetail> confirm(String idempotencyKey, UUID versionId) {
-        return executeVersionIdempotent(idempotencyKey, "PLAN_VERSION_CONFIRM", Map.of("versionId", versionId), Map.of(),
+    public IdempotentResult<PlanVersionDetail> confirm(String idempotencyKey, UUID versionId, ConfirmVersionCommand command) {
+        return executeVersionIdempotent(idempotencyKey, "PLAN_VERSION_CONFIRM", Map.of("versionId", versionId), command,
                 () -> {
                     PlanVersion draft = findVersionForUpdate(versionId);
                     draft.assertDraft();
+                    draft.assertExpectedRevision(command.expectedRevision());
                     findPlanForUpdate(draft.getPlanId());
                     validateCompleteness(draft);
+                    if (planRepository.findOverlappingConfirmedVersionForUpdate(
+                            draft.getPlanId(), draft.getStartDate(), draft.getEndDate()
+                    ).isPresent()) {
+                        throw new ApplicationException(ErrorCode.PLAN_VERSION_PERIOD_OVERLAP,
+                                "已存在重叠日期周期的确认计划", HttpStatus.CONFLICT);
+                    }
                     PlanVersion oldConfirmed = planRepository
                             .findConfirmedVersionForPeriodForUpdate(draft.getPlanId(), draft.getStartDate())
                             .orElse(null);
@@ -209,7 +228,9 @@ public class PlanApplicationService {
                                 oldConfirmed.getId(), beforeOld, oldConfirmed);
                     }
                     PlanVersion beforeDraft = copyVersion(draft);
-                    draft.confirm(oldConfirmed == null ? null : oldConfirmed.getId(), activeHealthConstraintSnapshot(), now);
+                    List<GoalSummarySnapshot> goalSnapshots = currentGoalSummaries(planRepository.findGoalIds(draft.getId()));
+                    planRepository.snapshotGoalLinks(draft.getId(), goalSnapshots);
+                    draft.confirm(oldConfirmed == null ? null : oldConfirmed.getId(), activeHealthConstraintSnapshotJson(), now);
                     assertUpdated(planRepository.updateVersion(draft));
                     PlanVersionDetail detail = detail(draft);
                     auditLogAppender.append("PLAN_VERSION_CONFIRMED", PLAN_VERSION_ENTITY, draft.getId(), beforeDraft, detail);
@@ -222,6 +243,8 @@ public class PlanApplicationService {
         return executeVersionIdempotent(idempotencyKey, "PLAN_VERSION_CANCEL", Map.of("versionId", versionId), command,
                 () -> {
                     PlanVersion version = findVersionForUpdate(versionId);
+                    version.assertDraft();
+                    version.assertExpectedRevision(command.expectedRevision());
                     PlanVersion before = copyVersion(version);
                     version.cancel(command.cancelReason(), Instant.now(clock));
                     assertUpdated(planRepository.updateVersion(version));
@@ -265,9 +288,11 @@ public class PlanApplicationService {
     }
 
     @Transactional
-    public PlanVersionDetail deleteDay(UUID dayId) {
+    public PlanVersionDetail deleteDay(UUID dayId, Integer expectedRevision) {
         PlanDay day = findDay(dayId);
         PlanVersion version = findVersionForUpdate(day.getVersionId());
+        version.assertDraft();
+        version.assertExpectedRevision(expectedRevision);
         List<PlanItem> deletedItems = planRepository.deleteItemsByDayId(day.getId());
         deletedItems.forEach(item -> auditLogAppender.append("PLAN_ITEM_DELETED", PLAN_ITEM_ENTITY, item.getId(), item, null));
         assertDeleted(planRepository.deleteDay(day.getId()), ErrorCode.PLAN_DAY_NOT_FOUND, "计划日不存在");
@@ -318,10 +343,12 @@ public class PlanApplicationService {
     }
 
     @Transactional
-    public PlanVersionDetail deleteItem(UUID itemId) {
+    public PlanVersionDetail deleteItem(UUID itemId, Integer expectedRevision) {
         PlanItem item = findItem(itemId);
         PlanDay day = findDay(item.getDayId());
         PlanVersion version = findVersionForUpdate(day.getVersionId());
+        version.assertDraft();
+        version.assertExpectedRevision(expectedRevision);
         assertDeleted(planRepository.deleteItem(item.getId()), ErrorCode.PLAN_ITEM_NOT_FOUND, "计划条目不存在");
         version.touchDraftContent(Instant.now(clock));
         assertUpdated(planRepository.updateVersion(version));
@@ -403,7 +430,14 @@ public class PlanApplicationService {
         List<PlanDayDetail> dayDetails = planRepository.findDays(version.getId()).stream()
                 .map(day -> new PlanDayDetail(day, planRepository.findItemsByDayId(day.getId())))
                 .toList();
-        return new PlanVersionDetail(version, dayDetails, planRepository.findGoalIds(version.getId()));
+        List<UUID> goalIds = planRepository.findGoalIds(version.getId());
+        return new PlanVersionDetail(
+                version,
+                dayDetails,
+                goalIds,
+                goalSummariesFor(version, goalIds),
+                healthConstraintsFor(version)
+        );
     }
 
     private void insertDefaultDays(PlanVersion version, Instant now) {
@@ -435,25 +469,43 @@ public class PlanApplicationService {
     }
 
     private void validateCompleteness(PlanVersion version) {
-        validateGoalLinks(planRepository.findGoalIds(version.getId()));
+        List<String> issues = collectValidationIssues(version);
+        if (!issues.isEmpty()) {
+            throw incomplete(String.join("；", issues));
+        }
+    }
+
+    private List<String> collectValidationIssues(PlanVersion version) {
+        List<String> issues = new java.util.ArrayList<>();
+        collectGoalIssues(planRepository.findGoalIds(version.getId()), issues);
         List<PlanDay> days = planRepository.findDays(version.getId());
         if (days.size() != 7) {
-            throw incomplete("计划草案必须包含 7 个计划日");
+            issues.add("计划草案必须包含 7 个计划日");
         }
         Set<LocalDate> dates = new LinkedHashSet<>();
         days.forEach(day -> {
             if (day.getTitle() == null || day.getTitle().isBlank()) {
-                throw incomplete("计划日标题不能为空");
+                issues.add("计划日标题不能为空");
             }
-            ensureDateInPeriod(version, day.getDayDate());
-            dates.add(day.getDayDate());
+            if (day.getDayDate() == null || day.getDayDate().isBefore(version.getStartDate())
+                    || day.getDayDate().isAfter(version.getEndDate())) {
+                issues.add("计划日日期必须在版本周期内");
+            } else {
+                dates.add(day.getDayDate());
+            }
         });
         for (int index = 0; index < 7; index++) {
             if (!dates.contains(version.getStartDate().plusDays(index))) {
-                throw incomplete("计划日必须连续且不重复");
+                issues.add("计划日必须连续且不重复");
+                break;
             }
         }
-        activeHealthConstraintSnapshot();
+        try {
+            currentActiveHealthConstraintSnapshot();
+        } catch (RuntimeException ex) {
+            issues.add("健康约束快照生成失败");
+        }
+        return issues.stream().distinct().toList();
     }
 
     private DomainException incomplete(String message) {
@@ -466,14 +518,127 @@ public class PlanApplicationService {
         }
     }
 
-    private String activeHealthConstraintSnapshot() {
+    private String activeHealthConstraintSnapshotJson() {
         try {
-            return objectMapper.writeValueAsString(healthConstraintRepository.findAll(
-                    new HealthConstraintFilter(ConstraintStatus.ACTIVE, false)
-            ));
+            return objectMapper.writeValueAsString(currentActiveHealthConstraintSnapshot());
         } catch (JsonProcessingException ex) {
             throw new ApplicationException(ErrorCode.INTERNAL_ERROR, "健康约束快照生成失败", HttpStatus.INTERNAL_SERVER_ERROR);
         }
+    }
+
+    private HealthConstraintSnapshot currentActiveHealthConstraintSnapshot() {
+        List<HealthConstraintSnapshot.Item> items = healthConstraintRepository.findAll(
+                new HealthConstraintFilter(ConstraintStatus.ACTIVE, false)
+        ).stream()
+                .map(constraint -> new HealthConstraintSnapshot.Item(
+                        constraint.getId(),
+                        constraint.getConstraintType().name(),
+                        constraint.getBodyRegion().name(),
+                        constraint.getSeverity().name(),
+                        constraint.getTitle(),
+                        constraint.getDescription(),
+                        constraint.getSourceType().name(),
+                        constraint.getSourceNote(),
+                        constraint.getStatus().name(),
+                        constraint.getEffectiveFrom(),
+                        constraint.getEffectiveTo()
+                ))
+                .toList();
+        return new HealthConstraintSnapshot(1, Instant.now(clock), items);
+    }
+
+    private HealthConstraintSnapshot healthConstraintsFor(PlanVersion version) {
+        if ((version.getStatus() == PlanVersionStatus.CONFIRMED || version.getStatus() == PlanVersionStatus.SUPERSEDED)
+                && version.getHealthConstraintSnapshot() != null) {
+            try {
+                return readHealthConstraintSnapshot(version);
+            } catch (JsonProcessingException ex) {
+                throw new ApplicationException(ErrorCode.INTERNAL_ERROR, "健康约束历史快照解析失败",
+                        HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+        }
+        return currentActiveHealthConstraintSnapshot();
+    }
+
+    private HealthConstraintSnapshot readHealthConstraintSnapshot(PlanVersion version) throws JsonProcessingException {
+        JsonNode node = objectMapper.readTree(version.getHealthConstraintSnapshot());
+        if (node.isObject() && node.has("schemaVersion")) {
+            return objectMapper.treeToValue(node, HealthConstraintSnapshot.class);
+        }
+        if (node.isArray()) {
+            List<HealthConstraintSnapshot.Item> items = new java.util.ArrayList<>();
+            for (JsonNode item : node) {
+                items.add(new HealthConstraintSnapshot.Item(
+                        uuidOrNull(item.path("id").asText(null)),
+                        item.path("constraintType").asText(null),
+                        item.path("bodyRegion").asText(null),
+                        item.path("severity").asText(null),
+                        item.path("title").asText(null),
+                        item.path("description").asText(null),
+                        item.path("sourceType").asText(null),
+                        item.path("sourceNote").asText(null),
+                        item.path("status").asText(null),
+                        localDateOrNull(item.path("effectiveFrom").asText(null)),
+                        localDateOrNull(item.path("effectiveTo").asText(null))
+                ));
+            }
+            return new HealthConstraintSnapshot(0, version.getConfirmedAt(), items);
+        }
+        throw new JsonProcessingException("unsupported health constraint snapshot") {
+        };
+    }
+
+    private UUID uuidOrNull(String value) {
+        return value == null ? null : UUID.fromString(value);
+    }
+
+    private LocalDate localDateOrNull(String value) {
+        return value == null ? null : LocalDate.parse(value);
+    }
+
+    private List<GoalSummarySnapshot> goalSummariesFor(PlanVersion version, List<UUID> goalIds) {
+        if (version.getStatus() == PlanVersionStatus.CONFIRMED || version.getStatus() == PlanVersionStatus.SUPERSEDED) {
+            List<GoalSummarySnapshot> snapshots = planRepository.findGoalSnapshots(version.getId());
+            if (snapshots.stream().allMatch(snapshot -> snapshot.title() != null)) {
+                return snapshots;
+            }
+        }
+        return currentGoalSummaries(goalIds);
+    }
+
+    private List<GoalSummarySnapshot> currentGoalSummaries(List<UUID> goalIds) {
+        return distinct(goalIds).stream()
+                .map(goalId -> goalRepository.findById(goalId)
+                        .map(this::toGoalSummary)
+                        .orElse(new GoalSummarySnapshot(goalId, null, null, null, null, null, null, null)))
+                .toList();
+    }
+
+    private GoalSummarySnapshot toGoalSummary(Goal goal) {
+        return new GoalSummarySnapshot(
+                goal.getId(),
+                goal.getTitle(),
+                goal.getGoalType().name(),
+                goal.getStatus().name(),
+                goal.getTargetValue(),
+                goal.getUnit().name(),
+                goal.getBaselineValue(),
+                goal.getTargetDate()
+        );
+    }
+
+    private void collectGoalIssues(List<UUID> goalIds, List<String> issues) {
+        distinct(goalIds).forEach(goalId -> {
+            var goal = goalRepository.findById(goalId);
+            if (goal.isEmpty()) {
+                issues.add("关联目标不存在: " + goalId);
+                return;
+            }
+            GoalStatus status = goal.get().getStatus();
+            if (status != GoalStatus.ACTIVE && status != GoalStatus.PAUSED) {
+                issues.add("只能关联进行中或暂停的目标: " + goal.get().getTitle());
+            }
+        });
     }
 
     private void validateGoalLinks(List<UUID> goalIds) {
@@ -548,7 +713,10 @@ public class PlanApplicationService {
                                      PlanVersionStatus expectedSourceStatus) {
     }
 
-    public record CancelVersionCommand(String cancelReason) {
+    public record ConfirmVersionCommand(Integer expectedRevision) {
+    }
+
+    public record CancelVersionCommand(String cancelReason, Integer expectedRevision) {
     }
 
     public record SaveDayCommand(LocalDate dayDate, String title, String note, Integer sortOrder, Integer expectedRevision) {

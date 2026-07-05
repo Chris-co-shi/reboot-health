@@ -2,7 +2,48 @@ import type { GoalStatus } from '@/types/m2a';
 
 export type PlanVersionStatus = 'DRAFT' | 'CONFIRMED' | 'SUPERSEDED' | 'CANCELLED';
 
-export type PlanItemType = 'BODYWEIGHT' | 'GYM' | 'SWIMMING' | 'BASKETBALL' | 'RECOVERY' | 'REST' | 'OTHER';
+export type PlanItemType =
+  | 'BODYWEIGHT'
+  | 'GYM'
+  | 'SWIMMING'
+  | 'BASKETBALL'
+  | 'RECOVERY'
+  | 'REST'
+  | 'CARDIO'
+  | 'NUTRITION'
+  | 'MEASUREMENT'
+  | 'OTHER';
+
+export interface GoalSummarySnapshot {
+  goalId: string;
+  title?: string;
+  goalType?: string;
+  status?: GoalStatus;
+  targetValue?: number;
+  unit?: string;
+  baselineValue?: number;
+  targetDate?: string;
+}
+
+export interface HealthConstraintSnapshotItem {
+  id: string;
+  constraintType: string;
+  bodyRegion: string;
+  severity: string;
+  title: string;
+  description?: string;
+  sourceType: string;
+  sourceNote?: string;
+  status: string;
+  effectiveFrom?: string;
+  effectiveTo?: string;
+}
+
+export interface HealthConstraintSnapshot {
+  schemaVersion: number;
+  generatedAt: string;
+  items: HealthConstraintSnapshotItem[];
+}
 
 export interface Plan {
   id: string;
@@ -61,10 +102,24 @@ export interface PlanVersion {
   createdAt: string;
   updatedAt: string;
   goalIds: string[];
+  goals: GoalSummarySnapshot[];
+  healthConstraints: HealthConstraintSnapshot;
   days: PlanDay[];
 }
 
-export type PlanVersionSummary = Omit<PlanVersion, 'goalIds' | 'days' | 'summary' | 'copiedFromVersionId' | 'supersedesVersionId' | 'supersededAt' | 'cancelledAt' | 'cancelReason'>;
+export type PlanVersionSummary = Omit<
+  PlanVersion,
+  | 'goalIds'
+  | 'goals'
+  | 'healthConstraints'
+  | 'days'
+  | 'summary'
+  | 'copiedFromVersionId'
+  | 'supersedesVersionId'
+  | 'supersededAt'
+  | 'cancelledAt'
+  | 'cancelReason'
+>;
 
 export interface CreatePlanRequest {
   title: string;
@@ -94,6 +149,19 @@ export interface CopyVersionRequest {
 
 export interface CancelVersionRequest {
   cancelReason: string;
+  expectedRevision: number;
+}
+
+export interface ConfirmVersionRequest {
+  expectedRevision: number;
+}
+
+export interface PlanVersionPreview {
+  detail: PlanVersion;
+  goals: GoalSummarySnapshot[];
+  healthConstraints: HealthConstraintSnapshot;
+  validationIssues: string[];
+  canConfirm: boolean;
 }
 
 export interface SaveDayRequest {

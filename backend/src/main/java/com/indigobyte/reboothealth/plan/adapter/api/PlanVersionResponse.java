@@ -6,7 +6,10 @@ import com.indigobyte.reboothealth.plan.domain.PlanItem;
 import com.indigobyte.reboothealth.plan.domain.PlanItemType;
 import com.indigobyte.reboothealth.plan.domain.PlanVersion;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionDetail;
+import com.indigobyte.reboothealth.plan.domain.PlanVersionPreview;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionStatus;
+import com.indigobyte.reboothealth.plan.domain.GoalSummarySnapshot;
+import com.indigobyte.reboothealth.plan.domain.HealthConstraintSnapshot;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -36,6 +39,8 @@ public record PlanVersionResponse(
         Instant createdAt,
         Instant updatedAt,
         List<UUID> goalIds,
+        List<GoalSummarySnapshot> goals,
+        HealthConstraintSnapshot healthConstraints,
         List<PlanDayResponse> days
 ) {
 
@@ -61,6 +66,8 @@ public record PlanVersionResponse(
                 version.getCreatedAt(),
                 version.getUpdatedAt(),
                 detail.goalIds(),
+                detail.goals(),
+                detail.healthConstraints(),
                 detail.days().stream().map(PlanDayResponse::from).toList()
         );
     }
@@ -159,5 +166,27 @@ public record PlanVersionResponse(
                     item.getUpdatedAt()
             );
         }
+    }
+}
+
+/**
+ * 计划版本确认预览响应 DTO。
+ */
+record PlanVersionPreviewResponse(
+        PlanVersionResponse detail,
+        List<GoalSummarySnapshot> goals,
+        HealthConstraintSnapshot healthConstraints,
+        List<String> validationIssues,
+        boolean canConfirm
+) {
+
+    static PlanVersionPreviewResponse from(PlanVersionPreview preview) {
+        return new PlanVersionPreviewResponse(
+                PlanVersionResponse.from(preview.detail()),
+                preview.goals(),
+                preview.healthConstraints(),
+                preview.validationIssues(),
+                preview.canConfirm()
+        );
     }
 }

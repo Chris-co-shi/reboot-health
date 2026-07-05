@@ -253,6 +253,8 @@ GET /api/v1/plans/{planId}/versions?status=
 POST /api/v1/plans/{planId}/versions
 ```
 
+`GET /api/v1/plans/current` 按 `UserProfile.timezone` 计算当前日期；档案不存在时使用 `app.default-timezone`，不使用 JVM 默认时区。
+
 PlanVersion：
 
 ```http
@@ -264,16 +266,37 @@ POST /api/v1/plan-versions/{versionId}/cancel
 POST /api/v1/plan-versions/{sourceVersionId}/copy
 ```
 
+`confirm` 请求体：
+
+```json
+{
+  "expectedRevision": 0
+}
+```
+
+`cancel` 请求体：
+
+```json
+{
+  "cancelReason": "人工取消原因",
+  "expectedRevision": 0
+}
+```
+
+`preview` 返回独立预览响应，至少包含 `detail`、`goals`、`healthConstraints`、`validationIssues`、`canConfirm`。其中已确认历史版本的 `goals` 和 `healthConstraints` 必须来自确认时快照。
+
 PlanDay / PlanItem：
 
 ```http
 POST /api/v1/plan-versions/{versionId}/days
 PUT /api/v1/plan-days/{dayId}
-DELETE /api/v1/plan-days/{dayId}
+DELETE /api/v1/plan-days/{dayId}?expectedRevision=
 POST /api/v1/plan-days/{dayId}/items
 PUT /api/v1/plan-items/{itemId}
-DELETE /api/v1/plan-items/{itemId}
+DELETE /api/v1/plan-items/{itemId}?expectedRevision=
 ```
+
+DELETE 不要求 `Idempotency-Key`，但删除前必须校验版本仍为 `DRAFT` 且 `expectedRevision` 匹配。stale revision 返回 `PLAN_VERSION_REVISION_CONFLICT`。
 
 幂等规则：
 
@@ -281,6 +304,8 @@ DELETE /api/v1/plan-items/{itemId}
 - 幂等重放不重新执行业务，不重新写审计。
 - 相同 key 但 operation 或请求内容不同返回 `IDEMPOTENCY_KEY_REUSED`。
 - 幂等记录、业务修改和审计处于同一事务。
+- `confirm` 和 `cancel` 的 `requestHash` 包含 `expectedRevision`。
+- 网络错误、408、429 和 5xx 后前端重试必须复用原 `Idempotency-Key`；只有明确 4xx 业务失败才清除 key。
 
 ## 7. M2B 数据库表
 
@@ -288,6 +313,7 @@ DELETE /api/v1/plan-items/{itemId}
 
 - `V3__create_plan_version_tables.sql`
 - `V4__create_idempotency_record.sql`
+- `V5__strengthen_m2b_integrity.sql`
 
 核心表：
 
@@ -295,7 +321,7 @@ DELETE /api/v1/plan-items/{itemId}
 - `plan_version`：7 天计划版本，含 `DRAFT`、`CONFIRMED`、`SUPERSEDED`、`CANCELLED`。
 - `plan_day`：版本内 7 天。
 - `plan_item`：计划日条目。
-- `plan_version_goal`：版本与目标关联。
+- `plan_version_goal`：版本与目标关联；V5 起保存确认时目标摘要快照。
 - `idempotency_record`：POST 幂等记录。
 
 关键约束：
@@ -308,6 +334,10 @@ DELETE /api/v1/plan-items/{itemId}
 - `plan_day` 日期由 trigger 保证落在版本周期内。
 - `idempotency_record.idempotency_key` 全局唯一。
 - `idempotency_record.state` 只允许 `PROCESSING`、`COMPLETED`。
+- V5 扩展 `plan_item.item_type`：`CARDIO`、`NUTRITION`、`MEASUREMENT`。
+- V5 增加 `plan_version` 状态与时间字段、取消原因、健康约束快照的一致性约束。
+- V5 增加 `idempotency_record` 的 PROCESSING/COMPLETED 字段完整性约束。
+- 重叠 `CONFIRMED` 周期必须返回 `PLAN_VERSION_PERIOD_OVERLAP`，不返回通用 `DATA_CONFLICT`。
 
 ## 8. 后续 API 占位
 

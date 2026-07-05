@@ -1,11 +1,13 @@
 import type { ApiErrorResponse } from '@/types/m2a';
 import type {
   CancelVersionRequest,
+  ConfirmVersionRequest,
   CopyVersionRequest,
   CreateDraftRequest,
   CreatePlanRequest,
   Plan,
   PlanVersion,
+  PlanVersionPreview,
   PlanVersionStatus,
   PlanVersionSummary,
   SaveDayRequest,
@@ -103,6 +105,10 @@ export function getPlanVersion(versionId: string) {
   return request<PlanVersion>(`/api/v1/plan-versions/${versionId}`);
 }
 
+export function previewPlanVersion(versionId: string) {
+  return request<PlanVersionPreview>(`/api/v1/plan-versions/${versionId}/preview`);
+}
+
 export function updatePlanVersion(versionId: string, payload: UpdateVersionRequest) {
   return request<PlanVersion>(`/api/v1/plan-versions/${versionId}`, {
     method: 'PUT',
@@ -118,10 +124,11 @@ export function copyPlanVersion(sourceVersionId: string, payload: CopyVersionReq
   });
 }
 
-export function confirmPlanVersion(versionId: string, idempotencyKey: string) {
+export function confirmPlanVersion(versionId: string, payload: ConfirmVersionRequest, idempotencyKey: string) {
   return request<PlanVersion>(`/api/v1/plan-versions/${versionId}/confirm`, {
     method: 'POST',
     headers: idempotencyHeaders(idempotencyKey),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -148,8 +155,10 @@ export function updatePlanDay(dayId: string, payload: SaveDayRequest) {
   });
 }
 
-export function deletePlanDay(dayId: string) {
-  return request<PlanVersion>(`/api/v1/plan-days/${dayId}`, { method: 'DELETE' });
+export function deletePlanDay(dayId: string, expectedRevision: number) {
+  return request<PlanVersion>(`/api/v1/plan-days/${dayId}${query({ expectedRevision: String(expectedRevision) })}`, {
+    method: 'DELETE',
+  });
 }
 
 export function createPlanItem(dayId: string, payload: SaveItemRequest, idempotencyKey: string) {
@@ -167,6 +176,8 @@ export function updatePlanItem(itemId: string, payload: SaveItemRequest) {
   });
 }
 
-export function deletePlanItem(itemId: string) {
-  return request<PlanVersion>(`/api/v1/plan-items/${itemId}`, { method: 'DELETE' });
+export function deletePlanItem(itemId: string, expectedRevision: number) {
+  return request<PlanVersion>(`/api/v1/plan-items/${itemId}${query({ expectedRevision: String(expectedRevision) })}`, {
+    method: 'DELETE',
+  });
 }

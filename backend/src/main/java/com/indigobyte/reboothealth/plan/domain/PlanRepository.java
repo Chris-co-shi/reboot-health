@@ -32,6 +32,8 @@ public interface PlanRepository {
 
     Optional<PlanVersion> findConfirmedVersionForPeriodForUpdate(UUID planId, LocalDate startDate);
 
+    Optional<PlanVersion> findOverlappingConfirmedVersionForUpdate(UUID planId, LocalDate startDate, LocalDate endDate);
+
     Optional<PlanVersion> findCurrentConfirmedVersion(LocalDate currentDate);
 
     List<PlanVersion> findVersions(UUID planId, PlanVersionFilter filter);
@@ -64,7 +66,11 @@ public interface PlanRepository {
 
     List<UUID> findGoalIds(UUID versionId);
 
+    List<GoalSummarySnapshot> findGoalSnapshots(UUID versionId);
+
     void replaceGoalLinks(UUID versionId, List<UUID> goalIds, java.time.Instant now);
 
     void insertGoalLinks(UUID versionId, List<UUID> goalIds, java.time.Instant now);
+
+    void snapshotGoalLinks(UUID versionId, List<GoalSummarySnapshot> snapshots);
 }

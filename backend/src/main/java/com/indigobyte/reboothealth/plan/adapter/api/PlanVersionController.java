@@ -1,6 +1,7 @@
 package com.indigobyte.reboothealth.plan.adapter.api;
 
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.CancelVersionRequest;
+import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.ConfirmVersionRequest;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.CopyVersionRequest;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.SaveDayRequest;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.SaveItemRequest;
@@ -8,11 +9,14 @@ import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.UpdateVersionRe
 import com.indigobyte.reboothealth.plan.application.IdempotentResult;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.CancelVersionCommand;
+import com.indigobyte.reboothealth.plan.application.PlanApplicationService.ConfirmVersionCommand;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.CopyVersionCommand;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.SaveDayCommand;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.SaveItemCommand;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.UpdateVersionCommand;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,13 +28,16 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.validation.annotation.Validated;
 
 /**
  * 计划版本、计划日和计划条目 REST API。
  */
 @RestController
 @RequestMapping("/api/v1")
+@Validated
 public class PlanVersionController {
 
     private final PlanApplicationService service;
@@ -45,8 +52,8 @@ public class PlanVersionController {
     }
 
     @GetMapping("/plan-versions/{versionId}/preview")
-    public PlanVersionResponse preview(@PathVariable UUID versionId) {
-        return PlanVersionResponse.from(service.getVersionDetail(versionId));
+    public PlanVersionPreviewResponse preview(@PathVariable UUID versionId) {
+        return PlanVersionPreviewResponse.from(service.preview(versionId));
     }
 
     @PutMapping("/plan-versions/{versionId}")
@@ -59,9 +66,11 @@ public class PlanVersionController {
     @PostMapping("/plan-versions/{versionId}/confirm")
     public ResponseEntity<PlanVersionResponse> confirm(
             @PathVariable UUID versionId,
-            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+            @Valid @RequestBody ConfirmVersionRequest request
     ) {
-        return response(map(service.confirm(idempotencyKey, versionId), PlanVersionResponse::from));
+        return response(map(service.confirm(idempotencyKey, versionId,
+                new ConfirmVersionCommand(request.expectedRevision())), PlanVersionResponse::from));
     }
 
     @PostMapping("/plan-versions/{versionId}/cancel")
@@ -70,7 +79,8 @@ public class PlanVersionController {
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody CancelVersionRequest request
     ) {
-        return response(map(service.cancel(idempotencyKey, versionId, new CancelVersionCommand(request.cancelReason())),
+        return response(map(service.cancel(idempotencyKey, versionId,
+                        new CancelVersionCommand(request.cancelReason(), request.expectedRevision())),
                 PlanVersionResponse::from));
     }
 
@@ -100,8 +110,9 @@ public class PlanVersionController {
     }
 
     @DeleteMapping("/plan-days/{dayId}")
-    public PlanVersionResponse deleteDay(@PathVariable UUID dayId) {
-        return PlanVersionResponse.from(service.deleteDay(dayId));
+    public PlanVersionResponse deleteDay(@PathVariable UUID dayId,
+                                         @RequestParam @NotNull @Min(0) Integer expectedRevision) {
+        return PlanVersionResponse.from(service.deleteDay(dayId, expectedRevision));
     }
 
     @PostMapping("/plan-days/{dayId}/items")
@@ -119,8 +130,9 @@ public class PlanVersionController {
     }
 
     @DeleteMapping("/plan-items/{itemId}")
-    public PlanVersionResponse deleteItem(@PathVariable UUID itemId) {
-        return PlanVersionResponse.from(service.deleteItem(itemId));
+    public PlanVersionResponse deleteItem(@PathVariable UUID itemId,
+                                          @RequestParam @NotNull @Min(0) Integer expectedRevision) {
+        return PlanVersionResponse.from(service.deleteItem(itemId, expectedRevision));
     }
 
     private SaveDayCommand toCommand(SaveDayRequest request) {

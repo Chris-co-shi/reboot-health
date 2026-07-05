@@ -3,6 +3,7 @@ package com.indigobyte.reboothealth.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -66,6 +67,36 @@ class M2bAuditRollbackIntegrationTest {
 
         assertThat(countRows("plan")).isZero();
         assertThat(countRows("idempotency_record")).isZero();
+    }
+
+    @Test
+    void sameIdempotencyKeyCanRetryAfterServerFailureRollback() throws Exception {
+        String key = "retry-after-500-" + UUID.randomUUID();
+        String payload = """
+                {
+                  "title":"500 后重试计划",
+                  "summary":"第一次失败后复用同一个 key"
+                }
+                """;
+        doThrow(new RuntimeException("audit failed once")).when(auditLogRepository).append(any(AuditLog.class));
+
+        mockMvc.perform(post("/api/v1/plans")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(payload))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+
+        reset(auditLogRepository);
+
+        mockMvc.perform(post("/api/v1/plans")
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(payload))
+                .andExpect(status().isCreated());
+
+        assertThat(countRows("plan")).isEqualTo(1);
+        assertThat(countRows("idempotency_record")).isEqualTo(1);
     }
 
     private int countRows(String table) {

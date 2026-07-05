@@ -31,6 +31,7 @@ management:
         enabled: true
 
 app:
+  default-timezone: ${APP_DEFAULT_TIMEZONE:Asia/Shanghai}
   ai:
     base-url: ${APP_AI_BASE_URL:https://api.openai.com/v1}
     api-key: ${APP_AI_API_KEY:}

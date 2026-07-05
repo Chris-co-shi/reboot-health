@@ -22,7 +22,13 @@ export function useIdempotentAction<TArgs extends unknown[], TResult>(
       currentKey.value = undefined;
       return result;
     } catch (error) {
-      if (error instanceof M2bApiClientError && error.status > 0) {
+      if (
+        error instanceof M2bApiClientError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 429
+      ) {
         currentKey.value = undefined;
       }
       throw error;

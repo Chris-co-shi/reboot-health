@@ -66,6 +66,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<ApiErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        String message = ex.getMostSpecificCause() == null ? ex.getMessage() : ex.getMostSpecificCause().getMessage();
+        if (message != null && (
+                message.contains("ex_plan_version_confirmed_period")
+                        || message.contains("uk_plan_version_confirmed_period")
+        )) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                    ErrorCode.PLAN_VERSION_PERIOD_OVERLAP,
+                    "已存在重叠日期周期的确认计划",
+                    List.of(),
+                    Instant.now()
+            ));
+        }
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
                 ErrorCode.DATA_CONFLICT,
                 "数据状态冲突",

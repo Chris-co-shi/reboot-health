@@ -12,5 +12,8 @@ public enum PlanItemType {
     BASKETBALL,
     RECOVERY,
     REST,
+    CARDIO,
+    NUTRITION,
+    MEASUREMENT,
     OTHER
 }

@@ -3,8 +3,10 @@ package com.indigobyte.reboothealth.api;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.hamcrest.Matchers.hasSize;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -80,9 +82,14 @@ class M2bApiIntegrationTest {
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE script = 'V4__create_idempotency_record.sql'",
                 Integer.class
         );
+        Integer v5Count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE script = 'V5__strengthen_m2b_integrity.sql'",
+                Integer.class
+        );
 
         assertThat(v3Count).isEqualTo(1);
         assertThat(v4Count).isEqualTo(1);
+        assertThat(v5Count).isEqualTo(1);
     }
 
     @Test
@@ -197,9 +204,137 @@ class M2bApiIntegrationTest {
 
         String overlappingVersionId = createDraft(planId, startDate.plusDays(3), "重叠周期");
         mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", overlappingVersionId)
-                        .header("Idempotency-Key", newKey("confirm-overlap")))
+                        .header("Idempotency-Key", newKey("confirm-overlap"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(revisionOfVersion(overlappingVersionId))))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+                .andExpect(jsonPath("$.code").value("PLAN_VERSION_PERIOD_OVERLAP"));
+    }
+
+    @Test
+    void staleRevisionCannotConfirmCancelOrDeleteDayAndItem() throws Exception {
+        String planId = createPlan(newKey("plan"), "长期计划");
+        MvcResult draftResult = createDraftResult(planId, LocalDate.now(Clock.systemUTC()), "本周期");
+        String versionId = readId(draftResult);
+        JsonNode draft = objectMapper.readTree(draftResult.getResponse().getContentAsString());
+        String firstDayId = draft.path("days").get(0).path("id").asText();
+        String secondDayId = draft.path("days").get(1).path("id").asText();
+
+        mockMvc.perform(put("/api/v1/plan-versions/{versionId}", versionId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title":"本周期已编辑",
+                                  "summary":"revision 变化",
+                                  "goalIds":["%s"],
+                                  "expectedRevision":0
+                                }
+                                """.formatted(goalId)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", versionId)
+                        .header("Idempotency-Key", newKey("confirm-stale"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(0)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PLAN_VERSION_REVISION_CONFLICT"));
+
+        mockMvc.perform(post("/api/v1/plan-versions/{versionId}/cancel", versionId)
+                        .header("Idempotency-Key", newKey("cancel-stale"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "cancelReason":"测试取消",
+                                  "expectedRevision":0
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PLAN_VERSION_REVISION_CONFLICT"));
+
+        mockMvc.perform(delete("/api/v1/plan-days/{dayId}", secondDayId)
+                        .param("expectedRevision", "0"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PLAN_VERSION_REVISION_CONFLICT"));
+
+        MvcResult itemResult = mockMvc.perform(post("/api/v1/plan-days/{dayId}/items", firstDayId)
+                        .header("Idempotency-Key", newKey("item"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "goalId":"%s",
+                                  "itemType":"BODYWEIGHT",
+                                  "title":"示例条目",
+                                  "plannedSets":2,
+                                  "sortOrder":1,
+                                  "expectedRevision":1
+                                }
+                                """.formatted(goalId)))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String itemId = objectMapper.readTree(itemResult.getResponse().getContentAsString())
+                .path("days").get(0).path("items").get(0).path("id").asText();
+
+        mockMvc.perform(delete("/api/v1/plan-items/{itemId}", itemId)
+                        .param("expectedRevision", "1"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PLAN_VERSION_REVISION_CONFLICT"));
+    }
+
+    @Test
+    void previewReturnsGoalHealthConstraintAndValidationIssues() throws Exception {
+        insertActiveHealthConstraint("示例当前训练注意");
+        String planId = createPlan(newKey("plan"), "长期计划");
+        MvcResult draftResult = createDraftResult(planId, LocalDate.now(Clock.systemUTC()), "本周期");
+        String versionId = readId(draftResult);
+        String dayId = objectMapper.readTree(draftResult.getResponse().getContentAsString())
+                .path("days").get(6).path("id").asText();
+
+        mockMvc.perform(delete("/api/v1/plan-days/{dayId}", dayId)
+                        .param("expectedRevision", "0"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/v1/plan-versions/{versionId}/preview", versionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.detail.id").value(versionId))
+                .andExpect(jsonPath("$.goals[0].title").value("示例训练习惯"))
+                .andExpect(jsonPath("$.healthConstraints.schemaVersion").value(1))
+                .andExpect(jsonPath("$.healthConstraints.items[0].title").value("示例当前训练注意"))
+                .andExpect(jsonPath("$.validationIssues", hasSize(2)))
+                .andExpect(jsonPath("$.canConfirm").value(false));
+    }
+
+    @Test
+    void confirmedHistoryUsesHealthAndGoalSnapshots() throws Exception {
+        UUID constraintId = insertActiveHealthConstraint("确认时健康约束");
+        String planId = createPlan(newKey("plan"), "长期计划");
+        String versionId = createDraft(planId, LocalDate.now(Clock.systemUTC()), "本周期");
+        confirm(versionId, newKey("confirm"));
+
+        jdbcTemplate.update("UPDATE health_constraint SET title = '后续修改的健康约束', updated_at = now() WHERE id = ?", constraintId);
+        jdbcTemplate.update("UPDATE goal SET title = '后续修改的目标', updated_at = now() WHERE id = ?", goalId);
+
+        mockMvc.perform(get("/api/v1/plan-versions/{versionId}", versionId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.healthConstraints.items[0].title").value("确认时健康约束"))
+                .andExpect(jsonPath("$.goals[0].title").value("示例训练习惯"));
+    }
+
+    @Test
+    void newPlanItemTypesCanBeSavedAndRead() throws Exception {
+        String planId = createPlan(newKey("plan"), "长期计划");
+        MvcResult draftResult = createDraftResult(planId, LocalDate.now(Clock.systemUTC()), "本周期");
+        JsonNode draft = objectMapper.readTree(draftResult.getResponse().getContentAsString());
+        String firstDayId = draft.path("days").get(0).path("id").asText();
+        String secondDayId = draft.path("days").get(1).path("id").asText();
+        String thirdDayId = draft.path("days").get(2).path("id").asText();
+
+        createItem(firstDayId, "CARDIO", 0);
+        createItem(secondDayId, "NUTRITION", 1);
+        MvcResult result = createItem(thirdDayId, "MEASUREMENT", 2);
+
+        JsonNode body = objectMapper.readTree(result.getResponse().getContentAsString());
+        assertThat(body.path("days").findValuesAsText("itemType"))
+                .contains("CARDIO", "NUTRITION", "MEASUREMENT");
     }
 
     @Test
@@ -267,14 +402,18 @@ class M2bApiIntegrationTest {
         int auditCount = countRows("audit_log");
 
         mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", versionId)
-                        .header("Idempotency-Key", key))
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(0)))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Idempotency-Replayed", "true"))
                 .andExpect(jsonPath("$.status").value("CONFIRMED"));
         assertThat(countRows("audit_log")).isEqualTo(auditCount);
 
         mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", versionId)
-                        .header("Idempotency-Key", newKey("confirm-again")))
+                        .header("Idempotency-Key", newKey("confirm-again"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(revisionOfVersion(versionId))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("PLAN_VERSION_NOT_DRAFT"));
     }
@@ -286,11 +425,14 @@ class M2bApiIntegrationTest {
         String versionId = readId(draft);
         String dayId = objectMapper.readTree(draft.getResponse().getContentAsString()).path("days").get(6).path("id").asText();
 
-        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete("/api/v1/plan-days/{dayId}", dayId))
+        mockMvc.perform(delete("/api/v1/plan-days/{dayId}", dayId)
+                        .param("expectedRevision", "0"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", versionId)
-                        .header("Idempotency-Key", newKey("confirm-incomplete")))
+                        .header("Idempotency-Key", newKey("confirm-incomplete"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(1)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("PLAN_VERSION_INCOMPLETE"));
 
@@ -308,6 +450,29 @@ class M2bApiIntegrationTest {
                 """, UUID.randomUUID()));
 
         assertThat(invalidState).isInstanceOf(DataIntegrityViolationException.class);
+
+        Throwable invalidProcessingFields = catchThrowable(() -> jdbcTemplate.update("""
+                INSERT INTO idempotency_record (
+                    id, idempotency_key, operation_code, request_hash, state, resource_type, created_at
+                ) VALUES (?, 'invalid-processing-key', 'OP', repeat('a', 64), 'PROCESSING', 'PLAN', now())
+                """, UUID.randomUUID()));
+
+        assertThat(invalidProcessingFields).isInstanceOf(DataIntegrityViolationException.class);
+
+        UUID planId = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO plan (id, title, created_at, updated_at)
+                VALUES (?, '约束测试计划', now(), now())
+                """, planId);
+        Throwable invalidConfirmedFields = catchThrowable(() -> jdbcTemplate.update("""
+                INSERT INTO plan_version (
+                    id, plan_id, version_number, period_revision, status, start_date, end_date,
+                    title, revision, created_at, updated_at
+                ) VALUES (?, ?, 1, 0, 'CONFIRMED', DATE '2026-07-06', DATE '2026-07-12',
+                    '非法确认版本', 0, now(), now())
+                """, UUID.randomUUID(), planId));
+
+        assertThat(invalidConfirmedFields).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     private String createPlan(String key, String title) throws Exception {
@@ -333,11 +498,39 @@ class M2bApiIntegrationTest {
                 .andReturn();
     }
 
+    private MvcResult createItem(String dayId, String itemType, int expectedRevision) throws Exception {
+        return mockMvc.perform(post("/api/v1/plan-days/{dayId}/items", dayId)
+                        .header("Idempotency-Key", newKey("item"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "goalId":"%s",
+                                  "itemType":"%s",
+                                  "title":"%s 示例",
+                                  "plannedSets":1,
+                                  "sortOrder":1,
+                                  "expectedRevision":%d
+                                }
+                                """.formatted(goalId, itemType, itemType, expectedRevision)))
+                .andExpect(status().isCreated())
+                .andReturn();
+    }
+
     private void confirm(String versionId, String key) throws Exception {
         mockMvc.perform(post("/api/v1/plan-versions/{versionId}/confirm", versionId)
-                        .header("Idempotency-Key", key))
+                        .header("Idempotency-Key", key)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(confirmPayload(revisionOfVersion(versionId))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("CONFIRMED"));
+    }
+
+    private String confirmPayload(int expectedRevision) {
+        return """
+                {
+                  "expectedRevision":%d
+                }
+                """.formatted(expectedRevision);
     }
 
     private String planPayload(String title) {
@@ -371,6 +564,22 @@ class M2bApiIntegrationTest {
 
     private String statusOfVersion(String versionId) {
         return jdbcTemplate.queryForObject("SELECT status FROM plan_version WHERE id = ?::uuid", String.class, versionId);
+    }
+
+    private int revisionOfVersion(String versionId) {
+        return jdbcTemplate.queryForObject("SELECT revision FROM plan_version WHERE id = ?::uuid", Integer.class, versionId);
+    }
+
+    private UUID insertActiveHealthConstraint(String title) {
+        UUID id = UUID.randomUUID();
+        jdbcTemplate.update("""
+                INSERT INTO health_constraint (
+                    id, constraint_type, body_region, severity, title, description, source_type, status,
+                    effective_from, created_at, updated_at
+                ) VALUES (?, 'TRAINING_PRECAUTION', 'FULL_BODY', 'LOW', ?, '虚构测试约束', 'USER_REPORTED',
+                    'ACTIVE', DATE '2026-01-01', now(), now())
+                """, id, title);
+        return id;
     }
 
     private String newKey(String prefix) {

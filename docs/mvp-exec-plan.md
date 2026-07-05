@@ -102,10 +102,12 @@ M2A-FIX 验收要求：
 - `DRAFT`、`CONFIRMED`、`SUPERSEDED`、`CANCELLED` 状态。
 - 当前计划按日期查询 `CONFIRMED` 版本。
 - 版本历史。
-- Goal 关联和确认时 ACTIVE 健康约束快照。
+- Goal 关联、确认时目标摘要快照和 ACTIVE 健康约束稳定快照。
 - `revision` 并发控制。
 - 必须 POST 接口的 `Idempotency-Key` 幂等控制。
 - M2B 审计追加写。
+- `confirm`、`cancel`、删除计划日、删除计划条目均校验 `expectedRevision`。
+- 当前计划日期按 `UserProfile.timezone` 或显式 `app.default-timezone` 计算。
 
 不包含：
 
@@ -124,6 +126,7 @@ M2A-FIX 验收要求：
 - 前端 `pnpm install --frozen-lockfile`、`typecheck`、`build` 通过。
 - Docker Compose 配置可校验。
 - `git diff --check` 通过。
+- stale revision、跨 UTC 日期、preview、历史快照、V5 数据库约束和扩展 PlanItemType 均有自动化测试覆盖。
 
 页面人工验收清单：
 
@@ -135,6 +138,9 @@ M2A-FIX 验收要求：
 - 从已确认版本复制新周期草案。
 - 同周期修订确认后旧版本显示为已替代。
 - 双击确认不会重复确认或重复审计。
+- 模拟网络失败、408、429 或 5xx 后重试不会生成第二个业务结果。
+- 已确认历史详情展示确认时健康约束和目标摘要，不受后续修改影响。
+- `CARDIO`、`NUTRITION`、`MEASUREMENT` 类型能正常显示中文并刷新后保留。
 - 刷新页面后版本历史和详情仍存在。
 
 ### M3 今日执行和每日数据记录

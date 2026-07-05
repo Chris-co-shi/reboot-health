@@ -207,13 +207,16 @@
 规则：
 
 - 不使用 `ACTIVE` 状态。
-- 当前计划通过 `CONFIRMED` 且 `startDate <= currentDate <= endDate` 计算。
+- 当前计划通过 `CONFIRMED` 且 `startDate <= currentDate <= endDate` 计算，`currentDate` 必须按 `UserProfile.timezone` 得出；档案不存在时使用显式 `app.default-timezone`，不得使用 JVM 默认时区。
 - 每个周期固定 7 天，`endDate = startDate + 6`。
 - `versionNumber` 是同一 Plan 下全局递增版本号。
 - `periodRevision` 是同一 `planId + startDate` 周期内递增修订号。
 - `copiedFromVersionId` 只表示内容复制来源。
 - `supersedesVersionId` 只在同周期修订确认时指向被替代版本。
-- 确认时保存 ACTIVE 健康约束 JSONB 快照。
+- 确认时保存带 `schemaVersion` 的 ACTIVE 健康约束稳定 JSONB 快照，不直接序列化领域对象。
+- 确认时在 `plan_version_goal` 保存目标摘要快照，历史版本展示不得受 Goal 后续修改影响。
+- `confirm` 和 `cancel` 必须带 `expectedRevision`，并在状态转换前校验。
+- 同一日期周期的新确认版本会替代旧 `CONFIRMED`；不同日期周期可同时为 `CONFIRMED`，但不得重叠。
 
 ### PlanDay
 
@@ -238,6 +241,9 @@
 - `BASKETBALL`
 - `RECOVERY`
 - `REST`
+- `CARDIO`
+- `NUTRITION`
+- `MEASUREMENT`
 - `OTHER`
 
 规则：

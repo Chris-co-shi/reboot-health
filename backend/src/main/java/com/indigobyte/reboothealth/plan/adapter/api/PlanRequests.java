@@ -52,8 +52,14 @@ public final class PlanRequests {
     ) {
     }
 
+    public record ConfirmVersionRequest(
+            @NotNull @Min(0) Integer expectedRevision
+    ) {
+    }
+
     public record CancelVersionRequest(
-            @NotBlank @Size(max = 300) String cancelReason
+            @NotBlank @Size(max = 300) String cancelReason,
+            @NotNull @Min(0) Integer expectedRevision
     ) {
     }
 

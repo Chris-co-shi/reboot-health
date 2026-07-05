@@ -1,6 +1,7 @@
 package com.indigobyte.reboothealth.plan.adapter.persistence;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.indigobyte.reboothealth.plan.domain.GoalSummarySnapshot;
 import com.indigobyte.reboothealth.plan.domain.Plan;
 import com.indigobyte.reboothealth.plan.domain.PlanDay;
 import com.indigobyte.reboothealth.plan.domain.PlanItem;
@@ -79,6 +80,13 @@ public class MyBatisPlanRepository implements PlanRepository {
     public Optional<PlanVersion> findConfirmedVersionForPeriodForUpdate(UUID planId, LocalDate startDate) {
         return Optional.ofNullable(PlanPersistenceConverter.toVersion(
                 versionMapper.selectConfirmedForPeriodForUpdate(planId, startDate)
+        ));
+    }
+
+    @Override
+    public Optional<PlanVersion> findOverlappingConfirmedVersionForUpdate(UUID planId, LocalDate startDate, LocalDate endDate) {
+        return Optional.ofNullable(PlanPersistenceConverter.toVersion(
+                versionMapper.selectOverlappingConfirmedForUpdate(planId, startDate, endDate)
         ));
     }
 
@@ -183,6 +191,22 @@ public class MyBatisPlanRepository implements PlanRepository {
     }
 
     @Override
+    public List<GoalSummarySnapshot> findGoalSnapshots(UUID versionId) {
+        return goalMapper.selectGoalSnapshots(versionId).stream()
+                .map(snapshot -> new GoalSummarySnapshot(
+                        snapshot.getGoalId(),
+                        snapshot.getGoalTitle(),
+                        snapshot.getGoalType(),
+                        snapshot.getGoalStatus(),
+                        snapshot.getTargetValue(),
+                        snapshot.getUnit(),
+                        snapshot.getBaselineValue(),
+                        snapshot.getTargetDate()
+                ))
+                .toList();
+    }
+
+    @Override
     public void replaceGoalLinks(UUID versionId, List<UUID> goalIds, Instant now) {
         goalMapper.deleteByVersionId(versionId);
         insertGoalLinks(versionId, goalIds, now);
@@ -191,5 +215,20 @@ public class MyBatisPlanRepository implements PlanRepository {
     @Override
     public void insertGoalLinks(UUID versionId, List<UUID> goalIds, Instant now) {
         goalIds.stream().distinct().forEach(goalId -> goalMapper.insertLink(versionId, goalId, now));
+    }
+
+    @Override
+    public void snapshotGoalLinks(UUID versionId, List<GoalSummarySnapshot> snapshots) {
+        snapshots.forEach(snapshot -> goalMapper.updateGoalSnapshot(
+                versionId,
+                snapshot.goalId(),
+                snapshot.title(),
+                snapshot.goalType(),
+                snapshot.status(),
+                snapshot.targetValue(),
+                snapshot.unit(),
+                snapshot.baselineValue(),
+                snapshot.targetDate()
+        ));
     }
 }

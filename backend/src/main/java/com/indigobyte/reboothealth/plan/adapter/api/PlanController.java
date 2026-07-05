@@ -3,6 +3,7 @@ package com.indigobyte.reboothealth.plan.adapter.api;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.CreateDraftRequest;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanRequests.CreatePlanRequest;
 import com.indigobyte.reboothealth.plan.adapter.api.PlanVersionResponse.PlanVersionSummaryResponse;
+import com.indigobyte.reboothealth.plan.application.CurrentPlanDateProvider;
 import com.indigobyte.reboothealth.plan.application.IdempotentResult;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService;
 import com.indigobyte.reboothealth.plan.application.PlanApplicationService.CreateDraftCommand;
@@ -10,8 +11,6 @@ import com.indigobyte.reboothealth.plan.application.PlanApplicationService.Creat
 import com.indigobyte.reboothealth.plan.domain.PlanVersionFilter;
 import com.indigobyte.reboothealth.plan.domain.PlanVersionStatus;
 import jakarta.validation.Valid;
-import java.time.Clock;
-import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -33,11 +32,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class PlanController {
 
     private final PlanApplicationService service;
-    private final Clock clock;
+    private final CurrentPlanDateProvider currentPlanDateProvider;
 
-    public PlanController(PlanApplicationService service, Clock clock) {
+    public PlanController(PlanApplicationService service, CurrentPlanDateProvider currentPlanDateProvider) {
         this.service = service;
-        this.clock = clock;
+        this.currentPlanDateProvider = currentPlanDateProvider;
     }
 
     @PostMapping
@@ -59,7 +58,7 @@ public class PlanController {
 
     @GetMapping("/current")
     public PlanVersionResponse current() {
-        return PlanVersionResponse.from(service.getCurrentPlan(LocalDate.now(clock)));
+        return PlanVersionResponse.from(service.getCurrentPlan(currentPlanDateProvider.currentDate()));
     }
 
     @GetMapping("/{planId}")

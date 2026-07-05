@@ -129,9 +129,12 @@ async function saveDay(day: PlanDay) {
 }
 
 async function removeDay(day: PlanDay) {
+  if (!version.value) {
+    return;
+  }
   try {
     await ElMessageBox.confirm('删除计划日会同时删除其条目，且只能在草案中执行。', '确认删除计划日', { type: 'warning' });
-    version.value = await deletePlanDay(day.id);
+    version.value = await deletePlanDay(day.id, version.value.revision);
     applyMetaForm();
     ElMessage.success('计划日已删除');
   } catch (error) {
@@ -190,9 +193,12 @@ async function submitItem() {
 }
 
 async function removeItem(item: PlanItem) {
+  if (!version.value) {
+    return;
+  }
   try {
     await ElMessageBox.confirm('确认删除该计划条目？', '确认删除条目', { type: 'warning' });
-    version.value = await deletePlanItem(item.id);
+    version.value = await deletePlanItem(item.id, version.value.revision);
     applyMetaForm();
     ElMessage.success('条目已删除');
   } catch (error) {

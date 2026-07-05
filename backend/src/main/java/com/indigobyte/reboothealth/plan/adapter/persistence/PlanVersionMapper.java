@@ -78,6 +78,24 @@ public interface PlanVersionMapper extends BaseMapper<PlanVersionDataObject> {
                    health_constraint_snapshot::text AS health_constraint_snapshot,
                    revision, confirmed_at, superseded_at, cancelled_at, cancel_reason, created_at, updated_at
             FROM plan_version
+            WHERE plan_id = #{planId}
+              AND status = 'CONFIRMED'
+              AND start_date <> #{startDate}
+              AND daterange(start_date, end_date, '[]') && daterange(#{startDate}, #{endDate}, '[]')
+            ORDER BY start_date
+            LIMIT 1
+            FOR UPDATE
+            """)
+    PlanVersionDataObject selectOverlappingConfirmedForUpdate(@Param("planId") UUID planId,
+                                                              @Param("startDate") LocalDate startDate,
+                                                              @Param("endDate") LocalDate endDate);
+
+    @Select("""
+            SELECT id, plan_id, version_number, period_revision, status, start_date, end_date,
+                   title, summary, copied_from_version_id, supersedes_version_id,
+                   health_constraint_snapshot::text AS health_constraint_snapshot,
+                   revision, confirmed_at, superseded_at, cancelled_at, cancel_reason, created_at, updated_at
+            FROM plan_version
             WHERE status = 'CONFIRMED' AND start_date <= #{currentDate} AND end_date >= #{currentDate}
             ORDER BY start_date DESC
             LIMIT 1
