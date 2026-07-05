@@ -46,6 +46,8 @@ export type GoalUnit =
   | 'MINUTES_PER_DAY'
   | 'METERS'
   | 'LAPS'
+  | 'REPETITIONS'
+  | 'SECONDS'
   | 'SCORE'
   | 'PERCENT'
   | 'NONE';

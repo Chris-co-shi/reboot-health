@@ -8,6 +8,11 @@ import java.time.LocalDate;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * 目标聚合。
+ *
+ * <p>目标表达方向和可量化指标，不包含每日训练动作。终态目标不可编辑，未来重新开始时应创建新目标。</p>
+ */
 public class Goal {
 
     private UUID id;
@@ -23,9 +28,6 @@ public class Goal {
     private Instant createdAt;
     private Instant updatedAt;
     private Instant archivedAt;
-
-    public Goal() {
-    }
 
     public Goal(UUID id, GoalType goalType, String title, BigDecimal targetValue, GoalUnit unit,
                 BigDecimal baselineValue, LocalDate targetDate, GoalStatus status, Integer priority,
@@ -52,6 +54,9 @@ public class Goal {
                 GoalStatus.ACTIVE, priority, null, now, now, null);
     }
 
+    /**
+     * 修改目标定义。仅 ACTIVE 和 PAUSED 可以编辑，避免完成、取消后的历史语义被改写。
+     */
     public void update(GoalType goalType, String title, BigDecimal targetValue, GoalUnit unit,
                        BigDecimal baselineValue, LocalDate targetDate, Integer priority, Instant now) {
         assertEditable();
@@ -66,6 +71,9 @@ public class Goal {
         this.updatedAt = now;
     }
 
+    /**
+     * 普通状态流转不允许进入 ARCHIVED；归档必须走 archive 并提供原因。
+     */
     public void changeStatus(GoalStatus targetStatus, Instant now) {
         assertEditable();
         status.assertCanTransitionTo(targetStatus);
@@ -73,11 +81,14 @@ public class Goal {
         this.updatedAt = now;
     }
 
+    /**
+     * 将目标归档。归档是隐藏保留历史的终态，不删除目标记录。
+     */
     public void archive(String archiveReason, Instant now) {
         if (archiveReason == null || archiveReason.isBlank()) {
             throw new DomainException(ErrorCode.VALIDATION_ERROR, "归档原因不能为空");
         }
-        status.assertCanTransitionTo(GoalStatus.ARCHIVED);
+        status.assertCanArchive();
         this.status = GoalStatus.ARCHIVED;
         this.archiveReason = archiveReason;
         this.updatedAt = now;
@@ -88,6 +99,9 @@ public class Goal {
         if (status == GoalStatus.ARCHIVED) {
             throw new DomainException(ErrorCode.GOAL_ARCHIVED, "已归档的目标不能编辑");
         }
+        if (status == GoalStatus.COMPLETED || status == GoalStatus.CANCELLED) {
+            throw new DomainException(ErrorCode.GOAL_INVALID_STATUS_TRANSITION, "终态目标不能编辑");
+        }
     }
 
     private static void validateTarget(GoalType goalType, BigDecimal targetValue, GoalUnit unit, BigDecimal baselineValue) {
@@ -96,6 +110,9 @@ public class Goal {
         }
         if (unit == GoalUnit.NONE && (targetValue != null || baselineValue != null)) {
             throw invalidTarget("unit 为 NONE 时目标值和基线值应为空");
+        }
+        if (unit == GoalUnit.NONE && goalType != GoalType.OTHER) {
+            throw invalidTarget("只有 OTHER 目标可以使用 NONE 单位");
         }
         if (!allowedUnits(goalType).contains(unit)) {
             throw invalidTarget("目标类型和单位不匹配");
@@ -107,11 +124,15 @@ public class Goal {
             case WEIGHT -> Set.of(GoalUnit.KG);
             case WAIST -> Set.of(GoalUnit.CM);
             case TRAINING_HABIT -> Set.of(GoalUnit.SESSIONS_PER_WEEK);
-            case SWIMMING -> Set.of(GoalUnit.METERS, GoalUnit.LAPS);
+            case SWIMMING -> Set.of(GoalUnit.METERS, GoalUnit.LAPS, GoalUnit.MINUTES, GoalUnit.SECONDS);
             case SLEEP -> Set.of(GoalUnit.MINUTES, GoalUnit.MINUTES_PER_DAY);
-            case AEROBIC_CAPACITY, STRENGTH, BASKETBALL_CONDITIONING -> Set.of(GoalUnit.MINUTES, GoalUnit.SCORE, GoalUnit.PERCENT);
+            case AEROBIC_CAPACITY, BASKETBALL_CONDITIONING -> Set.of(
+                    GoalUnit.MINUTES, GoalUnit.SECONDS, GoalUnit.SCORE, GoalUnit.PERCENT
+            );
+            case STRENGTH -> Set.of(GoalUnit.REPETITIONS, GoalUnit.SECONDS, GoalUnit.SCORE, GoalUnit.PERCENT);
             case OTHER -> Set.of(GoalUnit.NONE, GoalUnit.KG, GoalUnit.CM, GoalUnit.SESSIONS_PER_WEEK,
-                    GoalUnit.MINUTES, GoalUnit.MINUTES_PER_DAY, GoalUnit.METERS, GoalUnit.LAPS, GoalUnit.SCORE, GoalUnit.PERCENT);
+                    GoalUnit.MINUTES, GoalUnit.MINUTES_PER_DAY, GoalUnit.METERS, GoalUnit.LAPS,
+                    GoalUnit.REPETITIONS, GoalUnit.SECONDS, GoalUnit.SCORE, GoalUnit.PERCENT);
         };
     }
 
@@ -127,103 +148,51 @@ public class Goal {
         return id;
     }
 
-    public void setId(UUID id) {
-        this.id = id;
-    }
-
     public GoalType getGoalType() {
         return goalType;
-    }
-
-    public void setGoalType(GoalType goalType) {
-        this.goalType = goalType;
     }
 
     public String getTitle() {
         return title;
     }
 
-    public void setTitle(String title) {
-        this.title = title;
-    }
-
     public BigDecimal getTargetValue() {
         return targetValue;
-    }
-
-    public void setTargetValue(BigDecimal targetValue) {
-        this.targetValue = targetValue;
     }
 
     public GoalUnit getUnit() {
         return unit;
     }
 
-    public void setUnit(GoalUnit unit) {
-        this.unit = unit;
-    }
-
     public BigDecimal getBaselineValue() {
         return baselineValue;
-    }
-
-    public void setBaselineValue(BigDecimal baselineValue) {
-        this.baselineValue = baselineValue;
     }
 
     public LocalDate getTargetDate() {
         return targetDate;
     }
 
-    public void setTargetDate(LocalDate targetDate) {
-        this.targetDate = targetDate;
-    }
-
     public GoalStatus getStatus() {
         return status;
-    }
-
-    public void setStatus(GoalStatus status) {
-        this.status = status;
     }
 
     public Integer getPriority() {
         return priority;
     }
 
-    public void setPriority(Integer priority) {
-        this.priority = priority;
-    }
-
     public String getArchiveReason() {
         return archiveReason;
-    }
-
-    public void setArchiveReason(String archiveReason) {
-        this.archiveReason = archiveReason;
     }
 
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
     }
 
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
-    }
-
     public Instant getArchivedAt() {
         return archivedAt;
-    }
-
-    public void setArchivedAt(Instant archivedAt) {
-        this.archivedAt = archivedAt;
     }
 }

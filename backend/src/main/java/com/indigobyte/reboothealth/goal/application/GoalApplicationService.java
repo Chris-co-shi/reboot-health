@@ -15,11 +15,18 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 目标应用服务。
+ *
+ * <p>负责目标聚合的事务编排、审计追加和更新冲突转换；目标状态机和单位规则留在领域层。</p>
+ */
 @Service
+@RequiredArgsConstructor
 public class GoalApplicationService {
 
     private static final String ENTITY_TYPE = "Goal";
@@ -27,12 +34,6 @@ public class GoalApplicationService {
     private final GoalRepository repository;
     private final AuditLogAppender auditLogAppender;
     private final Clock clock;
-
-    public GoalApplicationService(GoalRepository repository, AuditLogAppender auditLogAppender, Clock clock) {
-        this.repository = repository;
-        this.auditLogAppender = auditLogAppender;
-        this.clock = clock;
-    }
 
     @Transactional(readOnly = true)
     public List<Goal> list(GoalFilter filter) {
@@ -52,9 +53,9 @@ public class GoalApplicationService {
                 command.priority(),
                 now
         );
-        Goal saved = repository.save(goal);
-        auditLogAppender.append("GOAL_CREATED", ENTITY_TYPE, saved.getId(), null, saved);
-        return saved;
+        repository.insert(goal);
+        auditLogAppender.append("GOAL_CREATED", ENTITY_TYPE, goal.getId(), null, goal);
+        return goal;
     }
 
     @Transactional
@@ -71,9 +72,9 @@ public class GoalApplicationService {
                 command.priority(),
                 Instant.now(clock)
         );
-        Goal saved = repository.save(current);
-        auditLogAppender.append("GOAL_UPDATED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("GOAL_UPDATED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     @Transactional
@@ -81,9 +82,9 @@ public class GoalApplicationService {
         Goal current = findRequired(id);
         Goal before = copy(current);
         current.changeStatus(targetStatus, Instant.now(clock));
-        Goal saved = repository.save(current);
-        auditLogAppender.append("GOAL_STATUS_CHANGED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("GOAL_STATUS_CHANGED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     @Transactional
@@ -91,9 +92,9 @@ public class GoalApplicationService {
         Goal current = findRequired(id);
         Goal before = copy(current);
         current.archive(archiveReason, Instant.now(clock));
-        Goal saved = repository.save(current);
-        auditLogAppender.append("GOAL_ARCHIVED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("GOAL_ARCHIVED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     private Goal findRequired(UUID id) {
@@ -120,6 +121,12 @@ public class GoalApplicationService {
                 source.getUpdatedAt(),
                 source.getArchivedAt()
         );
+    }
+
+    private void assertUpdated(boolean updated) {
+        if (!updated) {
+            throw new ApplicationException(ErrorCode.DATA_CONFLICT, "目标更新冲突，请刷新后重试", HttpStatus.CONFLICT);
+        }
     }
 
     public record SaveGoalCommand(

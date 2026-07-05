@@ -7,6 +7,6 @@
 - [0001 单人个人使用范围](0001-personal-single-user-scope.md)
 - [0002 模块化单体架构](0002-modular-monolith.md)
 - [0003 AI 只能生成建议](0003-ai-proposal-only.md)
-- [0004 Windows 10 Docker 与外部 PostgreSQL 17](0004-windows-docker-postgresql.md)
+- [0004 Docker 与外部 PostgreSQL 17](0004-windows-docker-postgresql.md)
 - [0005 前端使用 pnpm](0005-frontend-pnpm.md)
 - [0006 Redis 暂不进入 MVP 业务流程](0006-redis-not-in-mvp.md)

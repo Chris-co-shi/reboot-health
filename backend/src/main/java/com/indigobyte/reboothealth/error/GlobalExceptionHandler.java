@@ -2,6 +2,8 @@ package com.indigobyte.reboothealth.error;
 
 import java.time.Instant;
 import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -10,6 +12,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+/**
+ * REST API 的统一异常映射。
+ *
+ * <p>领域和应用异常按明确错误码返回；未预期异常记录服务端日志并返回 INTERNAL_ERROR，避免泄漏内部细节。</p>
+ */
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -56,10 +64,21 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    ResponseEntity<ApiErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ApiErrorResponse(
+                ErrorCode.DATA_CONFLICT,
+                "数据状态冲突",
+                List.of(),
+                Instant.now()
+        ));
+    }
+
     @ExceptionHandler(Exception.class)
     ResponseEntity<ApiErrorResponse> handleUnhandled(Exception ex) {
+        log.error("未处理的服务端异常", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ApiErrorResponse(
-                ErrorCode.DATA_CONFLICT,
+                ErrorCode.INTERNAL_ERROR,
                 "请求处理失败",
                 List.of(),
                 Instant.now()

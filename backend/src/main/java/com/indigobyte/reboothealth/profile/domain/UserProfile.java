@@ -6,6 +6,11 @@ import java.time.LocalDate;
 import java.util.Objects;
 import java.util.UUID;
 
+/**
+ * 个人健康档案聚合。
+ *
+ * <p>该聚合只保存相对稳定的基础信息和计划启动基线体重，不保存实时体重，避免与后续身体指标记录形成两个事实来源。</p>
+ */
 public class UserProfile {
 
     private UUID id;
@@ -17,9 +22,6 @@ public class UserProfile {
     private String timezone;
     private Instant createdAt;
     private Instant updatedAt;
-
-    public UserProfile() {
-    }
 
     public UserProfile(UUID id, String displayName, Sex sex, LocalDate birthDate, BigDecimal heightCm,
                        BigDecimal baselineWeightKg, String timezone, Instant createdAt, Instant updatedAt) {
@@ -58,7 +60,7 @@ public class UserProfile {
         this.updatedAt = now;
     }
 
-    private boolean sameNumber(BigDecimal left, BigDecimal right) {
+    private static boolean sameNumber(BigDecimal left, BigDecimal right) {
         if (left == null || right == null) {
             return left == right;
         }
@@ -69,71 +71,35 @@ public class UserProfile {
         return id;
     }
 
-    public void setId(UUID id) {
-        this.id = id;
-    }
-
     public String getDisplayName() {
         return displayName;
-    }
-
-    public void setDisplayName(String displayName) {
-        this.displayName = displayName;
     }
 
     public Sex getSex() {
         return sex;
     }
 
-    public void setSex(Sex sex) {
-        this.sex = sex;
-    }
-
     public LocalDate getBirthDate() {
         return birthDate;
-    }
-
-    public void setBirthDate(LocalDate birthDate) {
-        this.birthDate = birthDate;
     }
 
     public BigDecimal getHeightCm() {
         return heightCm;
     }
 
-    public void setHeightCm(BigDecimal heightCm) {
-        this.heightCm = heightCm;
-    }
-
     public BigDecimal getBaselineWeightKg() {
         return baselineWeightKg;
-    }
-
-    public void setBaselineWeightKg(BigDecimal baselineWeightKg) {
-        this.baselineWeightKg = baselineWeightKg;
     }
 
     public String getTimezone() {
         return timezone;
     }
 
-    public void setTimezone(String timezone) {
-        this.timezone = timezone;
-    }
-
     public Instant getCreatedAt() {
         return createdAt;
     }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
-
     public Instant getUpdatedAt() {
         return updatedAt;
-    }
-
-    public void setUpdatedAt(Instant updatedAt) {
-        this.updatedAt = updatedAt;
     }
 }

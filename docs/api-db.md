@@ -1,6 +1,6 @@
-# API 与数据库草案
+# API 与数据库
 
-本文档随里程碑持续更新。当前实现目标为 M2A：用户档案、健康约束、目标管理。
+本文档记录当前已实现或本轮修复中的 API 与数据库结构。未实现内容必须明确标记。
 
 ## 1. M2A REST API
 
@@ -31,9 +31,9 @@ POST /api/v1/health-constraints/{id}/archive
 规则：
 
 - 默认不返回 `ARCHIVED`。
-- 归档必须提供 `archiveReason`。
+- 普通状态接口不得把状态改为 `ARCHIVED`。
+- 归档必须走专用 archive 接口并提供 `archiveReason`。
 - 已归档约束禁止普通编辑和状态变更。
-- Repository 不提供业务语义的 `archive` 方法；应用服务完成状态变化后调用 `save`。
 
 ### Goal
 
@@ -49,10 +49,11 @@ POST /api/v1/goals/{id}/archive
 
 - 默认不返回 `ARCHIVED`。
 - `targetDate` 可选。
+- 普通状态接口不得把状态改为 `ARCHIVED`。
+- 只有 `ACTIVE` 和 `PAUSED` 目标允许 PUT 修改内容。
 - 已完成或已取消的目标如需重新开始，应创建新目标。
-- 已归档目标禁止普通编辑和状态变更。
 
-## 2. M2A 数据库表
+## 2. 数据库表
 
 所有时间戳由应用统一产生。Java 类型映射：
 
@@ -103,6 +104,11 @@ CREATE TABLE health_constraint (
 );
 ```
 
+V2 增强约束：
+
+- 归档状态必须有 `archive_reason` 和 `archived_at`。
+- 非归档状态不得有 `archive_reason` 或 `archived_at`。
+
 ### goal
 
 ```sql
@@ -123,6 +129,14 @@ CREATE TABLE goal (
 );
 ```
 
+V2 增强约束：
+
+- `priority BETWEEN 1 AND 5`。
+- `target_value IS NULL OR target_value >= 0`。
+- `baseline_value IS NULL OR baseline_value >= 0`。
+- 归档状态必须有 `archive_reason` 和 `archived_at`。
+- 非归档状态不得有 `archive_reason` 或 `archived_at`。
+
 ### audit_log
 
 ```sql
@@ -138,9 +152,18 @@ CREATE TABLE audit_log (
 );
 ```
 
-审计表只追加，不提供更新和删除业务接口。
+审计表只追加，不提供更新和删除业务接口。JSONB 写入保留专用 SQL 显式 `CAST(... AS jsonb)`。
 
-## 3. DTO 校验
+## 3. Repository 持久化语义
+
+- `UserProfileRepository`：`findCurrent`、`insert`、`update`。
+- `HealthConstraintRepository`：`findById`、`findAll`、`insert`、`update`。
+- `GoalRepository`：`findById`、`findAll`、`insert`、`update`。
+- `AuditLogRepository`：`append`。
+
+`insert` 使用 `BaseMapper.insert`，`update` 使用 `BaseMapper.updateById`。不得通过保存前查询模拟泛化 `save`。
+
+## 4. DTO 校验
 
 UserProfile：
 
@@ -162,19 +185,16 @@ HealthConstraint：
 Goal：
 
 - `title`：1-100。
-- `targetValue`、`baselineValue` 必须 `>= 0`。
 - `targetDate` 可选。
 - `priority`：1-5。
-- `WEIGHT` 默认使用 `KG`。
-- `WAIST` 默认使用 `CM`。
-- `TRAINING_HABIT` 默认使用 `SESSIONS_PER_WEEK`。
-- `SWIMMING` 可使用 `METERS` 或 `LAPS`。
-- `SLEEP` 可使用 `MINUTES` 或 `MINUTES_PER_DAY`。
-- `unit = NONE` 时，`targetValue` 和 `baselineValue` 应为空。
+- 除 `OTHER + NONE` 外，`targetValue` 必填且必须 `>= 0`。
+- `baselineValue` 可为空；存在时必须 `>= 0`。
+- `unit` 和 `goalType` 必须匹配。
+- `OTHER + NONE` 时 `targetValue` 和 `baselineValue` 必须为空。
 - 不合法组合返回 `GOAL_INVALID_TARGET`。
 - 不自动修正单位。
 
-## 4. 错误码
+## 5. 错误码
 
 - `PROFILE_NOT_INITIALIZED`
 - `PROFILE_VALIDATION_FAILED`
@@ -190,8 +210,9 @@ Goal：
 - `VALIDATION_ERROR`
 - `DATA_CONFLICT`
 - `AUDIT_WRITE_FAILED`
+- `INTERNAL_ERROR`
 
-## 5. 后续 API 占位
+## 6. 后续 API 占位
 
 M2A 不实现以下 API：
 

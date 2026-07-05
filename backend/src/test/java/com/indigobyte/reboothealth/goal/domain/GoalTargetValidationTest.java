@@ -15,9 +15,9 @@ class GoalTargetValidationTest {
         assertThatThrownBy(() -> Goal.create(
                 GoalType.WEIGHT,
                 "减重目标",
-                new BigDecimal("80.0"),
+                new BigDecimal("60.0"),
                 GoalUnit.CM,
-                new BigDecimal("94.0"),
+                new BigDecimal("72.0"),
                 null,
                 1,
                 Instant.parse("2026-01-01T00:00:00Z")
@@ -59,5 +59,33 @@ class GoalTargetValidationTest {
                 .isInstanceOf(DomainException.class)
                 .extracting("code")
                 .isEqualTo(ErrorCode.GOAL_INVALID_TARGET);
+    }
+
+    @Test
+    void strengthGoalCanUseRepetitions() {
+        Goal.create(
+                GoalType.STRENGTH,
+                "示例力量目标",
+                new BigDecimal("12"),
+                GoalUnit.REPETITIONS,
+                new BigDecimal("6"),
+                null,
+                2,
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
+    }
+
+    @Test
+    void otherGoalCanUseNoneWithoutNumericValues() {
+        Goal.create(
+                GoalType.OTHER,
+                "示例文字目标",
+                null,
+                GoalUnit.NONE,
+                null,
+                null,
+                5,
+                Instant.parse("2026-01-01T00:00:00Z")
+        );
     }
 }

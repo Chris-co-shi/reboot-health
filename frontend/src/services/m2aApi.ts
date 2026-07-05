@@ -25,25 +25,34 @@ export class ApiClientError extends Error {
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new ApiClientError(0, { code: 'NETWORK_ERROR', message: '无法连接到后端服务' });
+  }
+
+  const text = await response.text();
 
   if (!response.ok) {
-    let body: ApiErrorResponse;
+    let body: ApiErrorResponse = { code: 'REQUEST_FAILED', message: response.statusText };
     try {
-      body = await response.json();
+      if (text) {
+        body = JSON.parse(text);
+      }
     } catch {
       body = { code: 'REQUEST_FAILED', message: response.statusText };
     }
     throw new ApiClientError(response.status, body);
   }
 
-  return response.json() as Promise<T>;
+  return JSON.parse(text || 'null');
 }
 
 function query(params: Record<string, string | boolean | undefined>) {

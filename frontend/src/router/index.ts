@@ -1,32 +1,23 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import TodayView from '@/views/TodayView.vue';
-import PlanView from '@/views/PlanView.vue';
-import PlanOverviewView from '@/views/plan/PlanOverviewView.vue';
-import ProfileSetupView from '@/views/plan/ProfileSetupView.vue';
-import HealthConstraintsSetupView from '@/views/plan/HealthConstraintsSetupView.vue';
-import GoalsSetupView from '@/views/plan/GoalsSetupView.vue';
-import RecordsView from '@/views/RecordsView.vue';
-import TrendsView from '@/views/TrendsView.vue';
-import AdjustmentsView from '@/views/AdjustmentsView.vue';
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/today' },
-    { path: '/today', name: 'today', component: TodayView },
+    { path: '/today', name: 'today', component: () => import('@/views/TodayView.vue') },
     {
       path: '/plan',
-      component: PlanView,
+      component: () => import('@/views/PlanView.vue'),
       children: [
-        { path: '', name: 'plan', component: PlanOverviewView },
-        { path: 'setup/profile', name: 'plan-profile', component: ProfileSetupView },
-        { path: 'setup/constraints', name: 'plan-constraints', component: HealthConstraintsSetupView },
-        { path: 'setup/goals', name: 'plan-goals', component: GoalsSetupView },
+        { path: '', name: 'plan', component: () => import('@/views/plan/PlanOverviewView.vue') },
+        { path: 'setup/profile', name: 'plan-profile', component: () => import('@/views/plan/ProfileSetupView.vue') },
+        { path: 'setup/constraints', name: 'plan-constraints', component: () => import('@/views/plan/HealthConstraintsSetupView.vue') },
+        { path: 'setup/goals', name: 'plan-goals', component: () => import('@/views/plan/GoalsSetupView.vue') },
       ],
     },
-    { path: '/records', name: 'records', component: RecordsView },
-    { path: '/trends', name: 'trends', component: TrendsView },
-    { path: '/adjustments', name: 'adjustments', component: AdjustmentsView },
+    { path: '/records', name: 'records', component: () => import('@/views/RecordsView.vue') },
+    { path: '/trends', name: 'trends', component: () => import('@/views/TrendsView.vue') },
+    { path: '/adjustments', name: 'adjustments', component: () => import('@/views/AdjustmentsView.vue') },
   ],
 });
 

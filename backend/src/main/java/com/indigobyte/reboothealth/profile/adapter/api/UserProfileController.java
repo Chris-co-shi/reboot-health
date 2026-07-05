@@ -12,6 +12,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 个人档案 REST API。
+ *
+ * <p>个人版只暴露当前档案的读取和幂等保存，不引入账号、登录或多用户语义。</p>
+ */
 @RestController
 @RequestMapping("/api/v1/profile")
 public class UserProfileController {

@@ -16,11 +16,18 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 健康约束应用服务。
+ *
+ * <p>负责健康约束查询、创建、修改、普通状态变更和归档的事务编排；状态机由领域聚合执行。</p>
+ */
 @Service
+@RequiredArgsConstructor
 public class HealthConstraintApplicationService {
 
     private static final String ENTITY_TYPE = "HealthConstraint";
@@ -28,14 +35,6 @@ public class HealthConstraintApplicationService {
     private final HealthConstraintRepository repository;
     private final AuditLogAppender auditLogAppender;
     private final Clock clock;
-
-    public HealthConstraintApplicationService(HealthConstraintRepository repository,
-                                              AuditLogAppender auditLogAppender,
-                                              Clock clock) {
-        this.repository = repository;
-        this.auditLogAppender = auditLogAppender;
-        this.clock = clock;
-    }
 
     @Transactional(readOnly = true)
     public List<HealthConstraint> list(HealthConstraintFilter filter) {
@@ -57,9 +56,9 @@ public class HealthConstraintApplicationService {
                 command.effectiveTo(),
                 now
         );
-        HealthConstraint saved = repository.save(constraint);
-        auditLogAppender.append("HEALTH_CONSTRAINT_CREATED", ENTITY_TYPE, saved.getId(), null, saved);
-        return saved;
+        repository.insert(constraint);
+        auditLogAppender.append("HEALTH_CONSTRAINT_CREATED", ENTITY_TYPE, constraint.getId(), null, constraint);
+        return constraint;
     }
 
     @Transactional
@@ -78,9 +77,9 @@ public class HealthConstraintApplicationService {
                 command.effectiveTo(),
                 Instant.now(clock)
         );
-        HealthConstraint saved = repository.save(current);
-        auditLogAppender.append("HEALTH_CONSTRAINT_UPDATED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("HEALTH_CONSTRAINT_UPDATED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     @Transactional
@@ -88,9 +87,9 @@ public class HealthConstraintApplicationService {
         HealthConstraint current = findRequired(id);
         HealthConstraint before = copy(current);
         current.changeStatus(targetStatus, Instant.now(clock));
-        HealthConstraint saved = repository.save(current);
-        auditLogAppender.append("HEALTH_CONSTRAINT_STATUS_CHANGED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("HEALTH_CONSTRAINT_STATUS_CHANGED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     @Transactional
@@ -98,9 +97,9 @@ public class HealthConstraintApplicationService {
         HealthConstraint current = findRequired(id);
         HealthConstraint before = copy(current);
         current.archive(archiveReason, Instant.now(clock));
-        HealthConstraint saved = repository.save(current);
-        auditLogAppender.append("HEALTH_CONSTRAINT_ARCHIVED", ENTITY_TYPE, saved.getId(), before, saved);
-        return saved;
+        assertUpdated(repository.update(current));
+        auditLogAppender.append("HEALTH_CONSTRAINT_ARCHIVED", ENTITY_TYPE, current.getId(), before, current);
+        return current;
     }
 
     private HealthConstraint findRequired(UUID id) {
@@ -129,6 +128,12 @@ public class HealthConstraintApplicationService {
                 source.getUpdatedAt(),
                 source.getArchivedAt()
         );
+    }
+
+    private void assertUpdated(boolean updated) {
+        if (!updated) {
+            throw new ApplicationException(ErrorCode.DATA_CONFLICT, "健康约束更新冲突，请刷新后重试", HttpStatus.CONFLICT);
+        }
     }
 
     public record SaveHealthConstraintCommand(

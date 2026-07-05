@@ -1,28 +1,44 @@
-# Codex 项目规则
+# Codex 仓库规则
 
-## 每次必须遵守
+## 适用范围
 
-- 所有说明、计划、总结和自查结果使用中文。
-- 修改前先阅读本文件，以及本次任务直接相关的 `docs/` 文档。
-- 未经用户确认，不编写业务代码、不新增生产依赖、不扩大任务范围。
+- 本文件适用于整个仓库。
+- 修改 `backend/` 时，还必须遵守 `backend/AGENTS.md`。
+- 修改 `frontend/` 时，还必须遵守 `frontend/AGENTS.md`。
+- 用户当前提示中的直接要求优先于本文件。
+
+## 通用工作规则
+
+- 所有说明、计划、总结、自查和验收报告使用中文。
+- 代码标识符、类名、方法名和字段名使用英文。
+- 修改前先阅读本文件、当前目录相关 `AGENTS.md` 和任务相关文档。
+- 不扩大任务范围；每个里程碑完成后停止并等待用户验收。
 - 不为了测试通过而降低业务规则、删除测试、放宽断言或绕过校验。
-- AI 相关实现必须遵守：AI 只能生成建议，不能直接发布或修改生效计划。
-- 安全规则必须由确定性程序执行，不能只依赖提示词。
+- 不主动新增生产依赖；确需新增时先说明原因、替代方案和影响范围。
+- 不在仓库中写入真实健康资料、真实密钥、真实数据库密码或本机绝对路径。
 
-## 构建与验证命令
+## 通用安全规则
+
+- 本项目不做医学诊断，不替代医生意见。
+- AI 只能生成计划草案或调整建议，不能直接发布或修改生效计划。
+- 安全约束必须由确定性程序规则执行，不能只依赖 AI 提示词。
+- 历史执行记录不得随计划版本变化而改变。
+- 所有关键状态转换必须可审计、可测试。
+
+## 验证命令
 
 后端：
 
 ```bash
 cd backend
-/Users/sxc/Documents/tool/apache-maven-3.9.0/bin/mvn test
+mvn test
 ```
 
 前端：
 
 ```bash
 cd frontend
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run build
 ```
@@ -33,20 +49,19 @@ pnpm run build
 docker compose -f deploy/docker-compose.yml config
 ```
 
-## 验收规则
+## 完成定义
 
-- 每个里程碑必须可运行、可人工验收。
-- 每次完成后输出：修改文件、新增文件、删除文件、核心说明、验证命令、验证结果、未完成事项、风险点。
-- 涉及关键状态转换时必须有测试。
-- 文档任务至少检查文件清单和 OPEN 未确认事项。
+- 输出修改文件、新增文件、删除文件、核心说明、验证命令、验证结果、未完成事项和风险点。
+- 涉及状态转换、数据库迁移、审计或安全规则时必须有自动化测试。
+- 文档变更必须更新入口索引，并清理旧路径引用。
 
 ## 文档索引
 
 - 产品范围：`docs/product-scope.md`
 - 领域模型：`docs/domain-model.md`
 - 架构方案：`docs/architecture.md`
-- AI 调整设计：`docs/ai-adjustment-design.md`
+- API 与数据库：`docs/api-db.md`
 - 安全规则：`docs/safety-rules.md`
 - MVP 执行计划：`docs/mvp-exec-plan.md`
+- 未来 AI 调整设计：`docs/future/ai-adjustment.md`
 - 架构决策记录：`docs/decisions/`
-- API 与数据库草案：`docs/api-db-draft.md`

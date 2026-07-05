@@ -1,19 +1,20 @@
 # MVP 执行计划
 
-本文档是持续更新的执行计划。每个里程碑完成后必须更新状态、验收结果、测试结果和下一步。
+本文档是唯一里程碑状态来源。每个里程碑完成后必须更新状态、验收结果、测试结果和下一步。
 
 ## 1. 状态约定
 
 - `TODO`：未开始。
 - `IN_PROGRESS`：进行中。
-- `DONE`：已完成并通过验收。
+- `CODE_ACCEPTED`：自动化代码验收通过，等待用户页面人工验收。
+- `DONE`：用户验收通过。
 - `BLOCKED`：被未确认事项或外部条件阻塞。
 
 ## 2. 当前总状态
 
-- 当前阶段：M2A。
-- 当前目标：用户档案、健康约束、目标管理。
-- 当前业务状态：M2A 本地实现已完成，等待用户人工验收。
+- 当前阶段：M2A-FIX。
+- 当前目标：仓库治理、M2A 持久化重构、领域/API/数据库/前端修复。
+- 当前业务状态：M2A 功能已实现，正在进行治理和修复；完成后仍需用户页面人工验收。
 - 下一阶段：M2B 计划、计划版本和人工确认。
 
 ## 3. 里程碑
@@ -30,24 +31,17 @@
 - 前端空骨架。
 - Docker Compose 配置。
 
-验收条件：
-
-- 后端测试通过。
-- 前端类型检查和构建通过。
-- Docker Compose 配置可校验。
-
 ### M2A 用户档案、健康约束、目标管理
 
-状态：IN_PROGRESS，待用户验收后改为 DONE
+状态：CODE_ACCEPTED
 
 范围：
 
 - 唯一 `UserProfile`。
-- `HealthConstraint` 创建、编辑、状态变更、归档。
-- `Goal` 创建、编辑、状态变更、归档。
+- `HealthConstraint` 创建、编辑、停用、解决、归档。
+- `Goal` 创建、编辑、暂停、恢复、完成、取消、归档。
 - M2A 审计追加写。
 - `/plan/setup/profile`、`/plan/setup/constraints`、`/plan/setup/goals`。
-- README 小范围更新。
 
 不包含：
 
@@ -62,51 +56,38 @@
 - 文件上传。
 - 复杂动作库。
 
-验收条件：
+M2A-FIX 验收要求：
 
-- 可首次创建并更新唯一 `UserProfile`。
-- `UserProfile` 不含 `currentWeightKg`，使用 `baselineWeightKg`。
-- 可创建、编辑、状态切换、归档 `HealthConstraint`。
-- `HealthConstraint` 状态机符合领域文档。
-- 可创建、编辑、状态切换、归档 `Goal`。
-- `Goal` 状态机符合领域文档。
-- 归档不物理删除，归档后不可普通编辑。
-- 所有业务修改同事务写入审计。
-- 查询不写审计。
-- `PUT /api/v1/profile` 幂等请求不重复写业务记录，默认不写 `NO_CHANGE` 审计。
+- 普通状态接口不能归档。
+- 专用归档接口要求原因、设置 `archivedAt`、写入归档审计。
+- Goal 只有 `ACTIVE` 和 `PAUSED` 可编辑。
+- Goal 单位和值规则符合领域模型。
+- Persistence DO 与领域聚合分离。
+- Repository Port 显式区分 `insert` 和 `update`。
+- V2 Flyway 约束通过 PostgreSQL Testcontainers。
+- 前端显示中文枚举标签，提交前执行表单校验。
+- 文档和测试脱敏。
 
-测试要求：
+自动化验证：
 
-- UserProfile 首次保存创建。
-- UserProfile 再次保存更新同一条。
-- UserProfile 完全相同请求不重复更新、不写审计。
-- 单档案唯一性约束。
-- HealthConstraint 创建、修改、状态变化、归档。
-- HealthConstraint 非法状态流转拒绝。
-- HealthConstraint 已归档后禁止编辑和状态变更。
-- Goal 创建、修改、状态变化、归档。
-- Goal 非法状态流转拒绝。
-- Goal 已归档后禁止编辑和状态变更。
-- Goal 单位和值组合校验。
-- API 集成测试覆盖关键路径和错误路径。
-- Flyway 在 Testcontainers PostgreSQL 上完整执行。
-- `pnpm run typecheck`。
-- `pnpm run build`。
+- 后端测试通过。
+- 前端 `pnpm install --frozen-lockfile`、`typecheck`、`build` 通过。
+- Docker Compose 配置可校验。
+- `git diff --check` 通过。
+- 隐私和架构搜索检查通过。
 
-当前验证结果：
+页面人工验收完成前，M2A 只能记录为：
 
-- `/Users/sxc/Documents/tool/apache-maven-3.9.0/bin/mvn test`：通过，21 个后端测试。
-- `pnpm run typecheck`：通过。
-- `pnpm run build`：通过；Vite 输出依赖注释和大 chunk 警告，不影响构建。
-- `docker compose -f deploy/docker-compose.yml config`：通过。
+> 代码验收通过，等待用户页面人工验收
 
-OPEN：
+用户页面人工验收清单：
 
-- OPEN: `goalType = OTHER` 且 `unit = NONE` 时是否允许只填写文字目标说明。
-- OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
-- OPEN: 是否在 M2A API 中提供审计查询；默认只写入。
-- OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
-- OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。
+- 创建和更新个人档案。
+- 创建、编辑、停用、解决和归档健康约束。
+- 创建、暂停、恢复、完成、取消和归档目标。
+- 验证终态目标不能编辑。
+- 验证内部枚举均显示为中文。
+- 验证刷新页面后数据存在。
 
 ### M2B 计划、计划版本和人工确认
 
@@ -168,7 +149,14 @@ OPEN：
 
 范围：
 
-- Windows 10 + Docker 部署说明。
+- 私有部署说明。
 - Tailscale 访问说明。
 - 本地数据导出或备份。
 - 端到端人工验收。
+
+## 4. OPEN
+
+- OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
+- OPEN: 是否在 M2A API 中提供审计查询；默认只写入。
+- OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
+- OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。

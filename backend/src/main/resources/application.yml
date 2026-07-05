@@ -4,7 +4,7 @@ spring:
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://host.docker.internal:5432/reboot_health}
     username: ${SPRING_DATASOURCE_USERNAME:reboot_health}
-    password: ${SPRING_DATASOURCE_PASSWORD:reboot_health}
+    password: ${SPRING_DATASOURCE_PASSWORD:change-me}
     driver-class-name: org.postgresql.Driver
   flyway:
     enabled: ${SPRING_FLYWAY_ENABLED:true}

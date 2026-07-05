@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.indigobyte.reboothealth.audit.domain.AuditLog;
@@ -54,15 +55,16 @@ class M2aAuditRollbackIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {
-                                  "displayName":"sxc",
-                                  "sex":"MALE",
-                                  "birthDate":"1992-01-01",
-                                  "heightCm":175,
-                                  "baselineWeightKg":94,
+                                  "displayName":"测试用户B",
+                                  "sex":"UNSPECIFIED",
+                                  "birthDate":"1990-03-15",
+                                  "heightCm":168,
+                                  "baselineWeightKg":72.5,
                                   "timezone":"Asia/Shanghai"
                                 }
                                 """))
-                .andExpect(status().isInternalServerError());
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
 
         Integer count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM app_user_profile", Integer.class);
         assertThat(count).isZero();

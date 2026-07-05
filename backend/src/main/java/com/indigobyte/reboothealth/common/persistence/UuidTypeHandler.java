@@ -10,6 +10,11 @@ import org.apache.ibatis.type.JdbcType;
 import org.apache.ibatis.type.MappedJdbcTypes;
 import org.apache.ibatis.type.MappedTypes;
 
+/**
+ * PostgreSQL UUID 与 Java UUID 的 MyBatis 类型处理器。
+ *
+ * <p>用于明确 UUID 参数和结果集读取语义，避免驱动返回 String 或 UUID 时出现不一致转换。</p>
+ */
 @MappedTypes(UUID.class)
 @MappedJdbcTypes(JdbcType.OTHER)
 public class UuidTypeHandler extends BaseTypeHandler<UUID> {

@@ -1,5 +1,10 @@
 package com.indigobyte.reboothealth.error;
 
+/**
+ * API 统一错误码。
+ *
+ * <p>错误码面向前端和测试断言，新增业务规则时应优先复用明确错误码，避免把未知异常伪装成业务冲突。</p>
+ */
 public enum ErrorCode {
     PROFILE_NOT_INITIALIZED,
     PROFILE_VALIDATION_FAILED,
@@ -14,5 +19,6 @@ public enum ErrorCode {
     ENUM_INVALID,
     VALIDATION_ERROR,
     DATA_CONFLICT,
-    AUDIT_WRITE_FAILED
+    AUDIT_WRITE_FAILED,
+    INTERNAL_ERROR
 }

@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,12 +58,17 @@ class M2aApiIntegrationTest {
 
     @Test
     void flywayRunsM2aMigrationOnPostgreSql() {
-        Integer migrationCount = jdbcTemplate.queryForObject(
+        Integer v1Count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM flyway_schema_history WHERE script = 'V1__m2a_profile_constraints_goals.sql'",
                 Integer.class
         );
+        Integer v2Count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM flyway_schema_history WHERE script = 'V2__strengthen_m2a_constraints.sql'",
+                Integer.class
+        );
 
-        assertThat(migrationCount).isEqualTo(1);
+        assertThat(v1Count).isEqualTo(1);
+        assertThat(v2Count).isEqualTo(1);
     }
 
     @Test
@@ -78,8 +84,8 @@ class M2aApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(profilePayload()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.displayName").value("sxc"))
-                .andExpect(jsonPath("$.baselineWeightKg").value(94.0));
+                .andExpect(jsonPath("$.displayName").value("测试用户A"))
+                .andExpect(jsonPath("$.baselineWeightKg").value(72.5));
 
         assertThat(countRows("app_user_profile")).isEqualTo(1);
         assertThat(countRows("audit_log")).isEqualTo(1);
@@ -88,7 +94,15 @@ class M2aApiIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(profilePayload()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.displayName").value("sxc"));
+                .andExpect(jsonPath("$.displayName").value("测试用户A"));
+
+        String storedSex = jdbcTemplate.queryForObject("SELECT sex FROM app_user_profile", String.class);
+        assertThat(storedSex).isEqualTo("UNSPECIFIED");
+        String auditDisplayName = jdbcTemplate.queryForObject(
+                "SELECT after_snapshot ->> 'displayName' FROM audit_log WHERE action = 'PROFILE_CREATED'",
+                String.class
+        );
+        assertThat(auditDisplayName).isEqualTo("测试用户A");
 
         assertThat(countRows("app_user_profile")).isEqualTo(1);
         assertThat(countRows("audit_log")).isEqualTo(1);
@@ -98,7 +112,7 @@ class M2aApiIntegrationTest {
     void healthConstraintLifecycleRejectsArchivedUpdatesAndHidesArchivedByDefault() throws Exception {
         MvcResult createResult = mockMvc.perform(post("/api/v1/health-constraints")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(healthConstraintPayload("高血压", "ACTIVE")))
+                        .content(healthConstraintPayload("示例训练注意")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andReturn();
@@ -106,9 +120,9 @@ class M2aApiIntegrationTest {
 
         mockMvc.perform(put("/api/v1/health-constraints/{id}", id)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(healthConstraintPayload("高血压训练注意", "ACTIVE")))
+                        .content(healthConstraintPayload("示例训练注意已更新")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.title").value("高血压训练注意"));
+                .andExpect(jsonPath("$.title").value("示例训练注意已更新"));
 
         mockMvc.perform(patch("/api/v1/health-constraints/{id}/status", id)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -117,6 +131,17 @@ class M2aApiIntegrationTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("INACTIVE"));
+
+        int auditBeforeRejectedArchiveStatus = countRows("audit_log");
+        mockMvc.perform(patch("/api/v1/health-constraints/{id}/status", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"ARCHIVED"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("HEALTH_CONSTRAINT_INVALID_STATUS_TRANSITION"));
+        assertThat(countRows("audit_log")).isEqualTo(auditBeforeRejectedArchiveStatus);
+        assertThat(statusOf("health_constraint", id)).isEqualTo("INACTIVE");
 
         mockMvc.perform(post("/api/v1/health-constraints/{id}/archive", id)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -129,7 +154,7 @@ class M2aApiIntegrationTest {
 
         mockMvc.perform(put("/api/v1/health-constraints/{id}", id)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(healthConstraintPayload("归档后更新", "ACTIVE")))
+                        .content(healthConstraintPayload("归档后更新")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("HEALTH_CONSTRAINT_ARCHIVED"));
 
@@ -152,9 +177,9 @@ class M2aApiIntegrationTest {
                                 {
                                   "goalType":"WEIGHT",
                                   "title":"错误单位",
-                                  "targetValue":80,
+                                  "targetValue":60,
                                   "unit":"CM",
-                                  "baselineValue":94,
+                                  "baselineValue":72,
                                   "priority":1
                                 }
                                 """))
@@ -163,7 +188,7 @@ class M2aApiIntegrationTest {
 
         MvcResult createResult = mockMvc.perform(post("/api/v1/goals")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(goalPayload("减重到 80kg")))
+                        .content(goalPayload("示例体重目标")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andExpect(jsonPath("$.unit").value("KG"))
@@ -184,6 +209,17 @@ class M2aApiIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PAUSED"));
 
+        int auditBeforeRejectedArchiveStatus = countRows("audit_log");
+        mockMvc.perform(patch("/api/v1/goals/{id}/status", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"ARCHIVED"}
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("GOAL_INVALID_STATUS_TRANSITION"));
+        assertThat(countRows("audit_log")).isEqualTo(auditBeforeRejectedArchiveStatus);
+        assertThat(statusOf("goal", id)).isEqualTo("PAUSED");
+
         mockMvc.perform(post("/api/v1/goals/{id}/archive", id)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -202,6 +238,64 @@ class M2aApiIntegrationTest {
     }
 
     @Test
+    void completedGoalCannotBeEditedButCanBeArchived() throws Exception {
+        MvcResult createResult = mockMvc.perform(post("/api/v1/goals")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(goalPayload("示例习惯目标")))
+                .andExpect(status().isOk())
+                .andReturn();
+        String id = readId(createResult);
+
+        mockMvc.perform(patch("/api/v1/goals/{id}/status", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"COMPLETED"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        int auditBeforeRejectedUpdate = countRows("audit_log");
+        mockMvc.perform(put("/api/v1/goals/{id}", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(goalPayload("终态后修改")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("GOAL_INVALID_STATUS_TRANSITION"));
+        assertThat(countRows("audit_log")).isEqualTo(auditBeforeRejectedUpdate);
+        assertThat(statusOf("goal", id)).isEqualTo("COMPLETED");
+
+        mockMvc.perform(post("/api/v1/goals/{id}/archive", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"archiveReason":"终态后隐藏"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ARCHIVED"));
+    }
+
+    @Test
+    void databaseConstraintsRejectInvalidArchiveFieldsAndGoalValues() {
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> jdbcTemplate.update("""
+                INSERT INTO health_constraint (
+                    id, constraint_type, body_region, severity, title,
+                    source_type, status, created_at, updated_at
+                ) VALUES (
+                    ?, 'TRAINING_PRECAUTION', 'FULL_BODY', 'LOW', '示例',
+                    'USER_REPORTED', 'ARCHIVED', now(), now()
+                )
+                """, UUID.randomUUID()))).hasMessageContaining("ck_health_constraint_archive_fields");
+
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> jdbcTemplate.update("""
+                INSERT INTO goal (
+                    id, goal_type, title, unit, status, priority,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, 'OTHER', '示例', 'NONE', 'ACTIVE', 6,
+                    now(), now()
+                )
+                """, UUID.randomUUID()))).hasMessageContaining("ck_goal_priority_range");
+    }
+
+    @Test
     void invalidEnumAndBeanValidationReturnStableErrors() throws Exception {
         mockMvc.perform(post("/api/v1/health-constraints")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -210,7 +304,7 @@ class M2aApiIntegrationTest {
                                   "constraintType":"UNKNOWN",
                                   "bodyRegion":"CARDIOVASCULAR",
                                   "severity":"HIGH",
-                                  "title":"高血压",
+                                  "title":"示例约束",
                                   "sourceType":"DOCTOR_ADVICE"
                                 }
                                 """))
@@ -240,29 +334,33 @@ class M2aApiIntegrationTest {
         return count == null ? 0 : count;
     }
 
+    private String statusOf(String tableName, String id) {
+        return jdbcTemplate.queryForObject("SELECT status FROM " + tableName + " WHERE id = ?::uuid", String.class, id);
+    }
+
     private String profilePayload() {
         return """
                 {
-                  "displayName":"sxc",
-                  "sex":"MALE",
-                  "birthDate":"1992-01-01",
-                  "heightCm":175,
-                  "baselineWeightKg":94,
+                  "displayName":"测试用户A",
+                  "sex":"UNSPECIFIED",
+                  "birthDate":"1990-03-15",
+                  "heightCm":168,
+                  "baselineWeightKg":72.5,
                   "timezone":"Asia/Shanghai"
                 }
                 """;
     }
 
-    private String healthConstraintPayload(String title, String ignoredStatus) {
+    private String healthConstraintPayload(String title) {
         return """
                 {
-                  "constraintType":"HYPERTENSION",
-                  "bodyRegion":"CARDIOVASCULAR",
-                  "severity":"HIGH",
+                  "constraintType":"TRAINING_PRECAUTION",
+                  "bodyRegion":"FULL_BODY",
+                  "severity":"MEDIUM",
                   "title":"%s",
-                  "description":"按医嘱服用降压药，训练避免激进升级。",
-                  "sourceType":"DOCTOR_ADVICE",
-                  "sourceNote":"用户录入",
+                  "description":"示例描述：根据主观状态调整训练安排。",
+                  "sourceType":"USER_REPORTED",
+                  "sourceNote":"测试录入",
                   "effectiveFrom":"2026-07-01"
                 }
                 """.formatted(title);
@@ -273,9 +371,9 @@ class M2aApiIntegrationTest {
                 {
                   "goalType":"WEIGHT",
                   "title":"%s",
-                  "targetValue":80,
+                  "targetValue":60,
                   "unit":"KG",
-                  "baselineValue":94,
+                  "baselineValue":72,
                   "targetDate":"2026-12-31",
                   "priority":1
                 }

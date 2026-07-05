@@ -7,17 +7,13 @@
 - 明确领域边界和安全不变量。
 - 支持后续按里程碑纵向切片交付。
 
-## 2. 已确认部署环境
+## 2. 部署环境
 
 - 使用者：单人。
-- 目标机器：用户 PC 台式机。
-- 操作系统：Windows 10。
 - 运行方式：Docker。
 - 数据库：宿主机 PostgreSQL 17。
-- 访问方式：Tailscale。
-- Redis：已安装，但 MVP 暂不接入业务流程。
-
-## 3. 总体架构
+- 访问方式：本机端口绑定配合 Tailscale。
+- Redis：MVP 暂不接入业务流程。
 
 ```text
 Browser / Tailscale
@@ -28,7 +24,7 @@ Browser / Tailscale
 
 默认端口绑定 `127.0.0.1`，避免误暴露到公网或局域网。
 
-## 4. 后端架构
+## 3. 后端架构
 
 技术栈：
 
@@ -45,7 +41,7 @@ Browser / Tailscale
 - 模块化单体。
 - REST API。
 - 传统事务模型。
-- 领域服务保护关键状态转换。
+- 领域聚合保护关键状态转换。
 
 模块边界：
 
@@ -64,17 +60,17 @@ Browser / Tailscale
 
 ```text
 Controller -> Application Service -> Domain -> Repository Port
-Infrastructure Adapter -> Repository Port
-AI Adapter -> AI Port
+Persistence Adapter -> Repository Port
 ```
 
 约束：
 
-- 领域层不得依赖 AI 客户端、数据库 Mapper 或 Web Controller。
+- 领域层不得依赖数据库 Mapper、Persistence DO、Web Controller 或 AI 客户端。
 - AI 适配器不得直接创建生效计划。
 - 计划版本创建必须由领域服务完成。
+- 审计和业务修改必须在同一事务内提交。
 
-## 5. 前端架构
+## 4. 前端架构
 
 技术栈：
 
@@ -100,49 +96,37 @@ AI Adapter -> AI Port
 - 工具型界面，优先清晰和低录入负担。
 - 不做营销式首页。
 - 不使用复杂权限状态。
-- 关键操作必须展示前后差异、风险和确认状态。
+- API 调用统一经过 services 层。
+- 枚举值与中文显示文本分离。
 
-## 6. 数据库架构
+## 5. 数据库架构
 
-数据库使用 PostgreSQL 17。
-
-MVP 核心表草案见 `docs/api-db-draft.md`。
+数据库使用 PostgreSQL 17。当前 API 和数据库结构见 `docs/api-db.md`。
 
 约束方向：
 
-- 计划版本状态需要数据库约束配合领域服务保证。
+- Flyway 是唯一数据库结构变更入口。
+- 数据库约束和应用校验互补。
 - 执行记录必须引用计划版本。
 - 审计记录追加写。
 - AI 原始响应和校验后的结构化结果分开保存。
 
-## 7. 配置策略
+## 6. 配置策略
 
-环境变量：
+配置通过环境变量提供：
 
-- `SPRING_DATASOURCE_URL`
-- `SPRING_DATASOURCE_USERNAME`
-- `SPRING_DATASOURCE_PASSWORD`
-- `APP_AI_BASE_URL`
-- `APP_AI_API_KEY`
-- `APP_AI_MODEL`
+- 数据库连接地址、用户名和密码。
+- AI 兼容接口地址、API Key 和模型名。
+- 服务端口和安全边界配置。
 
-密钥约束：
+约束：
 
-- API Key 不写入代码仓库。
-- `deploy/.env` 不提交。
-- 文档和日志不得输出完整 API Key。
-
-## 8. 安全边界
-
-- 应用层暂不做账号体系。
-- Tailscale 和本机端口绑定承担访问边界。
-- 默认 Compose 绑定 `127.0.0.1`。
+- 真实 `.env` 不提交。
+- 文档、测试和日志不得输出完整密钥或真实数据库密码。
 - 健康数据不得写入普通调试日志。
-- 医疗相关输出不得生成诊断结论。
 
-## 9. OPEN 未确认事项
+## 7. OPEN 未确认事项
 
-- OPEN: PostgreSQL 数据库名、用户名和密码是否使用当前样例值。
 - OPEN: Tailscale 使用 Serve 还是绑定 Tailscale IP。
 - OPEN: 是否需要在应用层增加一个极简本地访问口令。
 - OPEN: 备份文件保存目录、保留天数和加密方式。

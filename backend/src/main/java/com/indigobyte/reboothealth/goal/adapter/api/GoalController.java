@@ -17,6 +17,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 目标 REST API。
+ *
+ * <p>Controller 只处理 DTO 到命令的转换，目标状态机和事务边界由应用服务与领域层负责。</p>
+ */
 @RestController
 @RequestMapping("/api/v1/goals")
 public class GoalController {

@@ -17,6 +17,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * 健康约束 REST API。
+ *
+ * <p>Controller 只负责请求转换并调用应用服务，不直接依赖持久化接口或持久化对象。</p>
+ */
 @RestController
 @RequestMapping("/api/v1/health-constraints")
 public class HealthConstraintController {

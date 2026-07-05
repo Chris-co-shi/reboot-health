@@ -22,13 +22,24 @@ class GoalStatusTest {
     }
 
     @Test
-    void completedAndCancelledCanOnlyMoveToArchived() {
-        assertThatCode(() -> GoalStatus.COMPLETED.assertCanTransitionTo(GoalStatus.ARCHIVED))
-                .doesNotThrowAnyException();
-        assertThatCode(() -> GoalStatus.CANCELLED.assertCanTransitionTo(GoalStatus.ARCHIVED))
-                .doesNotThrowAnyException();
-
+    void completedAndCancelledCannotMoveBackToActiveByNormalStatusChange() {
         assertThatThrownBy(() -> GoalStatus.COMPLETED.assertCanTransitionTo(GoalStatus.ACTIVE))
+                .isInstanceOf(DomainException.class)
+                .extracting("code")
+                .isEqualTo(ErrorCode.GOAL_INVALID_STATUS_TRANSITION);
+    }
+
+    @Test
+    void activePausedCompletedAndCancelledCanArchiveThroughDedicatedFlow() {
+        assertThatCode(GoalStatus.ACTIVE::assertCanArchive).doesNotThrowAnyException();
+        assertThatCode(GoalStatus.PAUSED::assertCanArchive).doesNotThrowAnyException();
+        assertThatCode(GoalStatus.COMPLETED::assertCanArchive).doesNotThrowAnyException();
+        assertThatCode(GoalStatus.CANCELLED::assertCanArchive).doesNotThrowAnyException();
+    }
+
+    @Test
+    void normalStatusChangeCannotArchive() {
+        assertThatThrownBy(() -> GoalStatus.ACTIVE.assertCanTransitionTo(GoalStatus.ARCHIVED))
                 .isInstanceOf(DomainException.class)
                 .extracting("code")
                 .isEqualTo(ErrorCode.GOAL_INVALID_STATUS_TRANSITION);

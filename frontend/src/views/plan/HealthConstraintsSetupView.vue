@@ -1,6 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { FormInstance, FormRules } from 'element-plus';
+import {
+  bodyRegionLabels,
+  bodyRegionOptions,
+  constraintSeverityLabels,
+  constraintSeverityOptions,
+  constraintSourceTypeOptions,
+  constraintStatusLabels,
+  constraintTypeLabels,
+  constraintTypeOptions,
+} from '@/constants/m2aLabels';
 import {
   ApiClientError,
   archiveHealthConstraint,
@@ -9,41 +20,12 @@ import {
   listHealthConstraints,
   updateHealthConstraint,
 } from '@/services/m2aApi';
-import type {
-  BodyRegion,
-  ConstraintSeverity,
-  ConstraintSourceType,
-  ConstraintStatus,
-  ConstraintType,
-  HealthConstraint,
-  HealthConstraintRequest,
-} from '@/types/m2a';
+import type { ConstraintStatus, HealthConstraint, HealthConstraintRequest } from '@/types/m2a';
 
-const constraintTypes: ConstraintType[] = [
-  'HYPERTENSION',
-  'CERVICAL_LIMITATION',
-  'SHOULDER_NECK_DISCOMFORT',
-  'LOWER_BACK_STRAIN',
-  'HIP_MOBILITY_LIMITATION',
-  'FOOT_SOLE_ISSUE',
-  'ACHILLES_DISCOMFORT',
-  'FORBIDDEN_MOVEMENT',
-  'TRAINING_PRECAUTION',
-  'OTHER',
-];
-const bodyRegions: BodyRegion[] = [
-  'CARDIOVASCULAR',
-  'CERVICAL_SPINE',
-  'SHOULDER_NECK',
-  'LOWER_BACK',
-  'HIP',
-  'FOOT_SOLE',
-  'ACHILLES_TENDON',
-  'FULL_BODY',
-  'OTHER',
-];
-const severities: ConstraintSeverity[] = ['INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-const sourceTypes: ConstraintSourceType[] = ['USER_REPORTED', 'DOCTOR_ADVICE', 'MEDICAL_REPORT', 'MEASUREMENT', 'OTHER'];
+interface ConstraintAction {
+  label: string;
+  status: ConstraintStatus;
+}
 
 const loading = ref(false);
 const saving = ref(false);
@@ -52,6 +34,8 @@ const items = ref<HealthConstraint[]>([]);
 const editingId = ref<string>();
 const archiveTarget = ref<HealthConstraint>();
 const archiveReason = ref('');
+const formRef = ref<FormInstance>();
+const fieldErrors = reactive<Record<string, string>>({});
 const archiveDialogVisible = computed({
   get: () => Boolean(archiveTarget.value),
   set: (visible: boolean) => {
@@ -62,6 +46,14 @@ const archiveDialogVisible = computed({
 });
 
 const form = reactive<HealthConstraintRequest>(newForm());
+const rules = reactive<FormRules<HealthConstraintRequest>>({
+  title: [
+    { required: true, message: '请输入标题', trigger: 'blur' },
+    { min: 1, max: 100, message: '标题需为 1-100 个字符', trigger: 'blur' },
+  ],
+  description: [{ max: 2000, message: '描述最多 2000 个字符', trigger: 'blur' }],
+  sourceNote: [{ max: 1000, message: '来源备注最多 1000 个字符', trigger: 'blur' }],
+});
 
 onMounted(loadItems);
 
@@ -77,6 +69,11 @@ async function loadItems() {
 }
 
 async function submit() {
+  clearFieldErrors();
+  const valid = await formRef.value?.validate().catch(() => false);
+  if (valid === false) {
+    return;
+  }
   saving.value = true;
   try {
     if (editingId.value) {
@@ -112,10 +109,16 @@ function startEdit(item: HealthConstraint) {
 
 async function updateStatus(item: HealthConstraint, status: ConstraintStatus) {
   try {
+    if (status === 'RESOLVED') {
+      await ElMessageBox.confirm('确认将该健康约束标记为已解决？', '确认状态变化', { type: 'warning' });
+    }
     await changeHealthConstraintStatus(item.id, status);
     ElMessage.success('状态已更新');
     await loadItems();
   } catch (error) {
+    if (error === 'cancel' || error === 'close') {
+      return;
+    }
     showError(error);
   }
 }
@@ -139,17 +142,17 @@ async function confirmArchive() {
   }
 }
 
-function actionsFor(status: ConstraintStatus) {
+function actionsFor(status: ConstraintStatus): ConstraintAction[] {
   if (status === 'ACTIVE') {
     return [
-      { label: '停用', status: 'INACTIVE' as const },
-      { label: '已解决', status: 'RESOLVED' as const },
+      { label: '停用', status: 'INACTIVE' },
+      { label: '已解决', status: 'RESOLVED' },
     ];
   }
   if (status === 'INACTIVE') {
     return [
-      { label: '启用', status: 'ACTIVE' as const },
-      { label: '已解决', status: 'RESOLVED' as const },
+      { label: '启用', status: 'ACTIVE' },
+      { label: '已解决', status: 'RESOLVED' },
     ];
   }
   return [];
@@ -172,9 +175,9 @@ function normalizeForm(): HealthConstraintRequest {
 
 function newForm(): HealthConstraintRequest {
   return {
-    constraintType: 'HYPERTENSION',
-    bodyRegion: 'CARDIOVASCULAR',
-    severity: 'HIGH',
+    constraintType: 'TRAINING_PRECAUTION',
+    bodyRegion: 'FULL_BODY',
+    severity: 'MEDIUM',
     title: '',
     description: '',
     sourceType: 'USER_REPORTED',
@@ -186,10 +189,40 @@ function newForm(): HealthConstraintRequest {
 
 function showError(error: unknown) {
   if (error instanceof ApiClientError) {
+    applyFieldErrors(error);
     ElMessage.error(`${error.code}: ${error.message}`);
     return;
   }
   ElMessage.error('请求失败');
+}
+
+function applyFieldErrors(error: ApiClientError) {
+  clearFieldErrors();
+  error.fields?.forEach((field) => {
+    fieldErrors[field.field] = field.message;
+  });
+}
+
+function clearFieldErrors() {
+  Object.keys(fieldErrors).forEach((key) => {
+    delete fieldErrors[key];
+  });
+}
+
+function constraintTypeLabel(item: HealthConstraint) {
+  return constraintTypeLabels[item.constraintType];
+}
+
+function bodyRegionLabel(item: HealthConstraint) {
+  return bodyRegionLabels[item.bodyRegion];
+}
+
+function severityLabel(item: HealthConstraint) {
+  return constraintSeverityLabels[item.severity];
+}
+
+function statusLabel(item: HealthConstraint) {
+  return constraintStatusLabels[item.status];
 }
 </script>
 
@@ -204,43 +237,50 @@ function showError(error: unknown) {
         <el-button v-if="editingId" @click="resetForm">取消编辑</el-button>
       </div>
 
-      <el-form label-position="top" class="entity-form" @submit.prevent="submit">
+      <el-form
+        ref="formRef"
+        :model="form"
+        :rules="rules"
+        label-position="top"
+        class="entity-form"
+        @submit.prevent="submit"
+      >
         <div class="form-grid">
-          <el-form-item label="类型">
+          <el-form-item label="类型" prop="constraintType" :error="fieldErrors.constraintType">
             <el-select v-model="form.constraintType">
-              <el-option v-for="item in constraintTypes" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in constraintTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="部位">
+          <el-form-item label="部位" prop="bodyRegion" :error="fieldErrors.bodyRegion">
             <el-select v-model="form.bodyRegion">
-              <el-option v-for="item in bodyRegions" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in bodyRegionOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="严重程度">
+          <el-form-item label="严重程度" prop="severity" :error="fieldErrors.severity">
             <el-select v-model="form.severity">
-              <el-option v-for="item in severities" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in constraintSeverityOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="来源">
+          <el-form-item label="来源" prop="sourceType" :error="fieldErrors.sourceType">
             <el-select v-model="form.sourceType">
-              <el-option v-for="item in sourceTypes" :key="item" :label="item" :value="item" />
+              <el-option v-for="item in constraintSourceTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="标题">
+        <el-form-item label="标题" prop="title" :error="fieldErrors.title">
           <el-input v-model="form.title" maxlength="100" show-word-limit />
         </el-form-item>
-        <el-form-item label="描述">
+        <el-form-item label="描述" prop="description" :error="fieldErrors.description">
           <el-input v-model="form.description" type="textarea" :rows="4" maxlength="2000" show-word-limit />
         </el-form-item>
-        <el-form-item label="来源备注">
+        <el-form-item label="来源备注" prop="sourceNote" :error="fieldErrors.sourceNote">
           <el-input v-model="form.sourceNote" maxlength="1000" show-word-limit />
         </el-form-item>
         <div class="form-grid">
-          <el-form-item label="生效开始">
+          <el-form-item label="生效开始" prop="effectiveFrom" :error="fieldErrors.effectiveFrom">
             <el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" />
           </el-form-item>
-          <el-form-item label="生效结束">
+          <el-form-item label="生效结束" prop="effectiveTo" :error="fieldErrors.effectiveTo">
             <el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" />
           </el-form-item>
         </div>
@@ -262,12 +302,19 @@ function showError(error: unknown) {
 
       <el-table v-loading="loading" :data="items" class="entity-table">
         <el-table-column prop="title" label="标题" min-width="150" />
-        <el-table-column prop="constraintType" label="类型" min-width="170" />
-        <el-table-column prop="severity" label="严重程度" width="110" />
+        <el-table-column label="类型" min-width="170">
+          <template #default="{ row }">{{ constraintTypeLabel(row) }}</template>
+        </el-table-column>
+        <el-table-column label="部位" min-width="120">
+          <template #default="{ row }">{{ bodyRegionLabel(row) }}</template>
+        </el-table-column>
+        <el-table-column label="严重程度" width="110">
+          <template #default="{ row }">{{ severityLabel(row) }}</template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="row.status === 'ACTIVE' ? 'success' : row.status === 'ARCHIVED' ? 'info' : 'warning'" effect="plain">
-              {{ row.status }}
+              {{ statusLabel(row) }}
             </el-tag>
           </template>
         </el-table-column>

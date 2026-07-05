@@ -10,13 +10,26 @@ import org.junit.jupiter.api.Test;
 class ConstraintStatusTest {
 
     @Test
-    void activeCanMoveToInactiveResolvedOrArchived() {
+    void activeCanMoveToInactiveOrResolvedByNormalStatusChange() {
         assertThatCode(() -> ConstraintStatus.ACTIVE.assertCanTransitionTo(ConstraintStatus.INACTIVE))
                 .doesNotThrowAnyException();
         assertThatCode(() -> ConstraintStatus.ACTIVE.assertCanTransitionTo(ConstraintStatus.RESOLVED))
                 .doesNotThrowAnyException();
-        assertThatCode(() -> ConstraintStatus.ACTIVE.assertCanTransitionTo(ConstraintStatus.ARCHIVED))
-                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void activeInactiveAndResolvedCanArchiveThroughDedicatedFlow() {
+        assertThatCode(ConstraintStatus.ACTIVE::assertCanArchive).doesNotThrowAnyException();
+        assertThatCode(ConstraintStatus.INACTIVE::assertCanArchive).doesNotThrowAnyException();
+        assertThatCode(ConstraintStatus.RESOLVED::assertCanArchive).doesNotThrowAnyException();
+    }
+
+    @Test
+    void normalStatusChangeCannotArchive() {
+        assertThatThrownBy(() -> ConstraintStatus.ACTIVE.assertCanTransitionTo(ConstraintStatus.ARCHIVED))
+                .isInstanceOf(DomainException.class)
+                .extracting("code")
+                .isEqualTo(ErrorCode.HEALTH_CONSTRAINT_INVALID_STATUS_TRANSITION);
     }
 
     @Test

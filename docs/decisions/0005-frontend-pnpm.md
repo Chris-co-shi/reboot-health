@@ -17,7 +17,4 @@
 - 前端使用 `pnpm-lock.yaml` 锁定依赖。
 - README 和 AGENTS 中的前端命令使用 pnpm。
 - Dockerfile 使用 Corepack 启用 pnpm。
-
-## OPEN
-
-- OPEN: pnpm 版本是否固定为当前 `packageManager` 字段版本，还是跟随本机 Corepack 默认版本。
+- pnpm 版本以 `frontend/package.json` 的 `packageManager` 字段为准。
