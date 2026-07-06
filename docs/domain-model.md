@@ -1,468 +1,188 @@
-# 领域模型
+# 业务领域模型
 
-## 1. 建模原则
+本文档只描述业务聚合、语义和不变量。设备认证、AgentRun、加密信封等技术运行模型的字段和表结构见 `api-db.md`。
 
-- 先保证计划闭环和安全不变量，再扩展训练内容库。
-- 计划、执行、分析、AI 建议、用户确认必须分离。
-- 历史执行记录是事实，不能随计划版本变化。
-- AI 输出是建议，不是领域事实。
-- 医疗相关内容只作为约束、提醒和风险信息，不生成诊断结论。
-- MVP 不为简单字段创建无业务行为的包装类；ID 使用 `UUID`，数值使用 `BigDecimal`，名称和标题使用 `String`。
+## 建模原则
 
-## 2. M2A 聚合
+- AI 输出是候选，不是领域事实。
+- 用户确认、计划发布、执行记录和分析结果必须分离。
+- 历史事实不能随计划或 AI 理解变化而改变。
+- 用户原始表达不得被内部标签覆盖。
+- 医疗相关内容只表达限制、来源、提醒和安全边界，不生成诊断结论。
+- 目标、约束和计划各自只有一个事实来源。
 
-### UserProfile
+## UserProfile
 
-个人档案聚合，保存单人应用的基础档案。
+用户基础档案，为计划日期、展示和上下文提供稳定基础信息。
 
-字段：
+核心语义：
 
-- `id: UUID`
-- `displayName: String`
-- `sex: Sex`
-- `birthDate: LocalDate`
-- `heightCm: BigDecimal`
-- `baselineWeightKg: BigDecimal?`
-- `timezone: String`
-- `createdAt: Instant`
-- `updatedAt: Instant`
+- 第一阶段只有一个当前用户档案。
+- `baselineWeightKg` 只表示建档基线，不代表当前体重。
+- 当前体重以后从最新 Observation 或指标记录获得。
+- 时间相关业务必须使用档案时区或显式默认时区，不使用服务器默认时区。
+- 档案不承载训练计划、每日状态或模型推断。
 
-规则：
+## HealthConstraint
 
-- 单人应用只允许一个当前档案。
-- `baselineWeightKg` 只表示建立档案时的基线体重，可为空。
-- 不保存 `currentWeightKg`。
-- M3 后当前体重必须从最新 `BodyMetricEntry` 查询。
-- 业务页面不得把 `baselineWeightKg` 展示为实时当前体重。
+已确认的健康约束，表达用户陈述、专业建议来源、身体区域、限制和注意事项。
 
-### HealthConstraint
+当前状态：
 
-健康约束聚合，表达用户手动维护的训练限制、风险提醒和注意事项。
-
-字段：
-
-- `id: UUID`
-- `constraintType: ConstraintType`
-- `bodyRegion: BodyRegion`
-- `severity: ConstraintSeverity`
-- `title: String`
-- `description: String`
-- `sourceType: ConstraintSourceType`
-- `sourceNote: String?`
-- `status: ConstraintStatus`
-- `effectiveFrom: LocalDate?`
-- `effectiveTo: LocalDate?`
-- `archiveReason: String?`
-- `createdAt: Instant`
-- `updatedAt: Instant`
-- `archivedAt: Instant?`
-
-规则：
-
-- AI 不能删除、停用或弱化健康约束。
-- M2A 允许用户手动创建、修改、停用、解决和归档。
-- 普通状态变更不能执行归档；归档必须走专用方法并提供原因。
+- M2A 已实现手工创建、修改、状态变化和归档。
 - 归档不物理删除。
-- 归档后禁止普通编辑和状态变更。
-- 不存储由系统推断出的医学诊断结论。
+- 归档后禁止普通编辑和状态变化。
+- 当前有效约束进入计划检查和 Agent 上下文。
 
-### Goal
+AI-first 演进规则：
 
-目标聚合，表达体重、腰围、训练习惯、有氧能力、力量、游泳、篮球体能和睡眠等目标。
+- AI 只能生成 `HealthConstraintCandidate`，不能直接修改已确认约束。
+- 候选必须保留用户原始陈述、风险描述、建议限制、来源和不确定性。
+- 重要约束经用户确认后，才映射到同一个 HealthConstraint 事实模型。
+- 固定类型和身体区域仅作为可选归一化标签，不限制自然语言表达。
+- AI 不得自动删除、停用或弱化已确认约束。
 
-字段：
+## Goal
 
-- `id: UUID`
-- `goalType: GoalType`
-- `title: String`
-- `targetValue: BigDecimal?`
-- `unit: GoalUnit`
-- `baselineValue: BigDecimal?`
-- `targetDate: LocalDate?`
-- `status: GoalStatus`
-- `priority: Integer`
-- `archiveReason: String?`
-- `createdAt: Instant`
-- `updatedAt: Instant`
-- `archivedAt: Instant?`
+Goal 是用户目标的唯一事实来源，为计划、进度解释和 AI 上下文提供稳定身份。
 
-规则：
+当前状态：
 
-- 目标不是计划任务。
-- 目标不直接包含每日训练动作。
-- 只有 `ACTIVE` 和 `PAUSED` 目标允许编辑内容。
-- `COMPLETED`、`CANCELLED` 和 `ARCHIVED` 为终态，不恢复为进行中。
-- 已完成或已取消的目标如需重新开始，应创建新目标。
-- 普通状态变更不能执行归档；归档必须走专用方法并提供原因。
+- M2A 已实现固定类型、结构化指标、优先级、状态和归档。
+- 目标不是计划任务，不直接包含每日动作。
+- `ACTIVE`、`PAUSED` 可以继续编辑；终态目标不恢复为进行中。
 
-## 3. 枚举
+开放目标演进规则：
 
-`Sex`：`MALE`、`FEMALE`、`OTHER`、`UNSPECIFIED`
+- 不新增并行 `OpenGoal` 表或第二套目标事实来源。
+- `originalText` 和 `desiredOutcome` 将成为开放表达核心。
+- GoalType 只作为可选归一化标签。
+- targetValue、unit、baselineValue、targetDate 等结构化指标可以为空。
+- 成功标准、指标、标签、假设和待澄清问题作为同一 Goal 的扩展信息。
+- 旧 Goal 保留原字段，不通过迁移伪造用户原始表达或期望结果。
+- AI 只能提出创建或补全候选，用户确认后才写入事实。
 
-`ConstraintType`：`HYPERTENSION`、`CERVICAL_LIMITATION`、`SHOULDER_NECK_DISCOMFORT`、`LOWER_BACK_STRAIN`、`HIP_MOBILITY_LIMITATION`、`FOOT_SOLE_ISSUE`、`ACHILLES_DISCOMFORT`、`FORBIDDEN_MOVEMENT`、`TRAINING_PRECAUTION`、`OTHER`
+## Plan
 
-`BodyRegion`：`CARDIOVASCULAR`、`CERVICAL_SPINE`、`SHOULDER_NECK`、`LOWER_BACK`、`HIP`、`FOOT_SOLE`、`ACHILLES_TENDON`、`FULL_BODY`、`OTHER`
+Plan 是长期计划身份。第一阶段只维护一个当前 Plan，周期内容由 PlanVersion 表达。
 
-`ConstraintSeverity`：`INFO`、`LOW`、`MEDIUM`、`HIGH`、`CRITICAL`
+Plan 不等于长期 Program：
 
-`ConstraintSourceType`：`USER_REPORTED`、`DOCTOR_ADVICE`、`MEDICAL_REPORT`、`MEASUREMENT`、`OTHER`
+- Plan 是现有持久化身份和版本容器。
+- Program 是后续 AI-first 的用户可读长期方向。
+- Program 不应取代或复制 PlanVersion 的发布职责。
 
-`ConstraintStatus`：`ACTIVE`、`INACTIVE`、`RESOLVED`、`ARCHIVED`
+## PlanVersion
 
-`GoalType`：`WEIGHT`、`WAIST`、`TRAINING_HABIT`、`AEROBIC_CAPACITY`、`STRENGTH`、`SWIMMING`、`BASKETBALL_CONDITIONING`、`SLEEP`、`OTHER`
-
-`GoalStatus`：`ACTIVE`、`PAUSED`、`COMPLETED`、`CANCELLED`、`ARCHIVED`
-
-`GoalUnit`：`KG`、`CM`、`SESSIONS_PER_WEEK`、`MINUTES`、`MINUTES_PER_DAY`、`METERS`、`LAPS`、`REPETITIONS`、`SECONDS`、`SCORE`、`PERCENT`、`NONE`
-
-## 4. 状态流转
-
-### HealthConstraint
-
-| 当前状态 | 普通状态变更允许目标 |
-|---|---|
-| ACTIVE | INACTIVE, RESOLVED |
-| INACTIVE | ACTIVE, RESOLVED |
-| RESOLVED | 无 |
-| ARCHIVED | 无 |
-
-归档允许来源：`ACTIVE`、`INACTIVE`、`RESOLVED`。归档只能通过专用 `archive` 方法。
-
-状态语义：
-
-- `ACTIVE`：当前有效，必须进入后续规则引擎和 AI 当前上下文。
-- `INACTIVE`：用户暂时停用，不参与规则判断；可作为历史信息进入 AI 上下文，但必须明确标记为非当前约束。
-- `RESOLVED`：问题已解决或不再需要当前限制，不参与规则判断；M2A 不允许重新激活。
-- `ARCHIVED`：用户主动归档，默认列表不显示，不参与规则和 AI 当前上下文，禁止普通编辑和状态变更，M2A 不实现恢复。
-
-### Goal
-
-| 当前状态 | 普通状态变更允许目标 |
-|---|---|
-| ACTIVE | PAUSED, COMPLETED, CANCELLED |
-| PAUSED | ACTIVE, COMPLETED, CANCELLED |
-| COMPLETED | 无 |
-| CANCELLED | 无 |
-| ARCHIVED | 无 |
-
-归档允许来源：`ACTIVE`、`PAUSED`、`COMPLETED`、`CANCELLED`。归档只能通过专用 `archive` 方法。
-
-状态语义：
-
-- `ACTIVE`：正在执行。
-- `PAUSED`：暂停执行，未来可以恢复。
-- `COMPLETED`：已完成，终态。
-- `CANCELLED`：已取消，终态。
-- `ARCHIVED`：隐藏保留，终态。
-
-## 5. Goal 单位规则
-
-- `WEIGHT`：`KG`
-- `WAIST`：`CM`
-- `TRAINING_HABIT`：`SESSIONS_PER_WEEK`
-- `SWIMMING`：`METERS`、`LAPS`、`MINUTES`
-- `STRENGTH`：`KG`、`REPETITIONS`、`SECONDS`、`SCORE`
-- `AEROBIC_CAPACITY`：`MINUTES`、`METERS`、`SCORE`
-- `BASKETBALL_CONDITIONING`：`MINUTES`、`REPETITIONS`、`SCORE`
-- `SLEEP`：`MINUTES`、`MINUTES_PER_DAY`
-- `OTHER`：`NONE` 或其他明确单位
-
-除 `OTHER + NONE` 外：
-
-- `targetValue` 必填且必须大于或等于 0。
-- `baselineValue` 可为空；存在时必须大于或等于 0。
-- `unit` 和 `goalType` 必须匹配。
-
-`OTHER + NONE`：
-
-- `targetValue` 必须为空。
-- `baselineValue` 必须为空。
-- 允许用标题表达文字目标。
-
-## 6. M2B 计划聚合
-
-### Plan
-
-长期计划身份。MVP 只维护一个当前 Plan，周期内容全部由 PlanVersion 表达。
-
-字段：
-
-- `id: UUID`
-- `title: String`
-- `summary: String?`
-- `createdAt: Instant`
-- `updatedAt: Instant`
-
-### PlanVersion
-
-7 天计划周期版本。
+PlanVersion 是 7 天计划周期版本，也是当前周计划的唯一发布引擎。
 
 状态：
 
 - `DRAFT`：可编辑、可取消、可确认。
-- `CONFIRMED`：已确认，不可修改；可以是历史、当前或未来周期。
-- `SUPERSEDED`：同一日期周期旧确认版本被新确认版本替代，不可修改。
-- `CANCELLED`：已取消草案，不可修改。
+- `CONFIRMED`：已确认且不可修改。
+- `SUPERSEDED`：同周期旧确认版本被新修订替代。
+- `CANCELLED`：已取消草案。
 
-规则：
+不变量：
 
-- 不使用 `ACTIVE` 状态。
-- 当前计划通过 `CONFIRMED` 且 `startDate <= currentDate <= endDate` 计算，`currentDate` 必须按 `UserProfile.timezone` 得出；档案不存在时使用显式 `app.default-timezone`，不得使用 JVM 默认时区。
-- 每个周期固定 7 天，`endDate = startDate + 6`。
-- `versionNumber` 是同一 Plan 下全局递增版本号。
-- `periodRevision` 是同一 `planId + startDate` 周期内递增修订号。
-- `copiedFromVersionId` 只表示内容复制来源。
-- `supersedesVersionId` 只在同周期修订确认时指向被替代版本。
-- 确认时保存带 `schemaVersion` 的 ACTIVE 健康约束稳定 JSONB 快照，不直接序列化领域对象。
-- 确认时在 `plan_version_goal` 保存目标摘要快照，历史版本展示不得受 Goal 后续修改影响。
-- `confirm` 和 `cancel` 必须带 `expectedRevision`，并在状态转换前校验。
-- 同一日期周期的新确认版本会替代旧 `CONFIRMED`；不同日期周期可同时为 `CONFIRMED`，但不得重叠。
+- 周期固定 7 天。
+- 当前计划通过用户时区和日期查询，不使用 `ACTIVE` 状态。
+- 同周期只能有一个当前草案和一个当前确认版本。
+- 不同确认周期不得重叠。
+- 同周期修订确认后显式替代旧确认版本。
+- 确认时保存健康约束和目标稳定快照。
+- 已确认、已替代和已取消版本不可原地修改。
+- 编辑、确认和取消必须校验 revision。
+- AI 只能生成草案候选，用户确认后由 Java 计划领域服务发布。
 
-### PlanDay
+## PlanDay 与 PlanItem
 
-计划周期内的一天。
+PlanDay 表示版本周期内的一天；可确认草案必须恰好包含连续 7 天。
 
-规则：
-
-- 可确认草案必须恰好有 7 个 PlanDay。
-- 日期必须连续、不重复且落在版本周期内。
-- 标题必填。
-- 休息日允许 0 个 PlanItem。
-
-### PlanItem
-
-计划日中的人工计划条目。
-
-类型：
-
-- `BODYWEIGHT`
-- `GYM`
-- `SWIMMING`
-- `BASKETBALL`
-- `RECOVERY`
-- `REST`
-- `CARDIO`
-- `NUTRITION`
-- `MEASUREMENT`
-- `OTHER`
-
-规则：
+PlanItem 是计划日的人工计划条目：
 
 - 不建立复杂动作库。
 - 数值字段不得为负数。
-- RPE 存在时必须在 1 到 10。
-- 可选关联 `Goal`，只能关联 `ACTIVE` 或 `PAUSED` 目标。
+- RPE 等评分必须满足明确范围。
+- 可以关联同一个 Goal 事实来源。
+- 休息日允许没有条目。
+- 用户界面以后通过 DailyAction 展示，不直接暴露内部版本和条目技术结构。
 
-## 7. M2.5-A Agent 与设备模型
+## 后续 AI-first 模型
 
-M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 `PlanVersion` 的业务语义，只新增技术与产品骨架模型。
+以下模型已经确认方向，但尚未在 M2.5-A 实现。
 
-### AppUser
+### Program
 
-单用户身份边界，用于后续设备和 AgentRun 归属。
+用户可读的 8 到 24 周长期方向，回答总体目标、策略、阶段、安全边界和成功标准。
 
-字段：
+Program 是规划语义，不直接发布每日计划，也不建立并行周计划事实源。
 
-- `id: UUID`
-- `status: String`
-- `createdAt: Instant`
-- `updatedAt: Instant`
+### Phase
 
-规则：
+Program 下 2 到 6 周的当前阶段，表达阶段重点、进入条件、退出条件和成功标准。
 
-- 第一阶段只创建一个默认用户。
-- 不实现注册、密码、找回密码、角色权限或多租户。
+### Weekly Plan
 
-### Device
+用户语言中的周计划。内部必须映射到现有 PlanVersion、PlanDay 和 PlanItem，不新建独立发布引擎。
 
-已登记设备。
+### DailyAction
 
-字段：
+用户当天看到的行动卡，来源于已确认周计划、当天状态和允许的低风险调整。
 
-- `id: UUID`
-- `userId: UUID`
-- `deviceName: String`
-- `platform: DevicePlatform`
-- `status: DeviceStatus`
-- `trustLevel: DeviceTrustLevel`
-- `createdAt: Instant`
-- `updatedAt: Instant`
-- `lastSeenAt: Instant?`
-- `revokedAt: Instant?`
+DailyAction 不是 PlanItem 表单的简单改名；它需要包含用户可读原因、完成定义和可调整范围。
 
-规则：
+### DailyActionExecution
 
-- 首台设备为 `TRUSTED_PRIMARY`。
-- 后续设备通过 `PairingSession` 创建。
-- 每台设备可单独撤销，撤销不影响其他设备。
-- 不能撤销最后一台 `ACTIVE` 可信设备。
-- `TRUSTED_PRIMARY` 必须先显式转移给另一台 `ACTIVE` 设备后才能撤销。
+回答“计划做了没有、做了多少”的执行事实。
 
-### BootstrapSession
+最小状态方向：完成、部分完成、跳过。执行事实不得整体塞入 Observation。
 
-首台设备初始化用的一次性 code 会话。
+### Observation
 
-字段：
+回答“在某个时间观察到了什么”，用于体重、睡眠、步数、心率、疲劳、疼痛和设备数据等观察事实。
 
-- `id: UUID`
-- `codeHash: String`
-- `status: BootstrapStatus`
-- `expiresAt: Instant`
-- `consumedAt: Instant?`
-- `failureCount: Integer`
-- `createdAt: Instant`
-- `updatedAt: Instant`
+Observation 与执行记录相互关联，但不能互相替代。
 
-规则：
+### Memory Candidate
 
-- bootstrap code 只能由服务端 CLI 生成。
-- 服务端只保存摘要，不保存明文。
-- code 短时有效、一次性消费。
-- 并发消费只能一个成功。
-- 初始化完成后永久关闭首台初始化入口。
+Agent 从用户表达或执行数据中提取的记忆候选。分为：
 
-### PairingSession
+- 用户确认事实。
+- 行为模式候选。
+- 策略经验。
 
-后续设备配对会话。
+重要健康事实不能仅凭一次模型推断成为长期记忆。候选必须可追溯、可纠正、可停用或替代。
 
-字段：
+## 模型关系
 
-- `id: UUID`
-- `userId: UUID`
-- `createdByDeviceId: UUID`
-- `codeHash: String`
-- `status: PairingStatus`
-- `expiresAt: Instant`
-- `consumedAt: Instant?`
-- `cancelledAt: Instant?`
-- `createdDeviceId: UUID?`
-- `createdAt: Instant`
-- `updatedAt: Instant`
+```text
+UserProfile
+├── HealthConstraint
+├── Goal
+└── Program（计划中）
+    └── Phase（计划中）
 
-规则：
+Plan
+└── PlanVersion
+    ├── PlanDay
+    │   └── PlanItem
+    └── Goal Snapshot / HealthConstraint Snapshot
 
-- 只能由已授权设备创建。
-- 一次性消费，过期或已消费后不能重放。
-- 二维码或 payload 不携带长期访问令牌。
-- 二维码 payload 只在创建响应中临时生成，不写入数据库、日志或审计。
+PlanVersion
+→ DailyAction（计划中）
+→ DailyActionExecution（计划中）
 
-### DeviceCredential
+执行反馈与设备数据
+→ Observation（计划中）
+→ Memory Candidate（计划中）
+```
 
-设备凭据摘要。
+## 当前未决事项
 
-字段：
+- `OPEN`：开放 Goal 扩展字段的最终最小集合。
+- `OPEN`：Program 与现有 Plan 的持久化关系采用独立聚合还是适配读模型。
+- `OPEN`：DailyAction 是持久化命令模型还是由周计划投影产生。
+- `NEEDS_MEDICAL_REVIEW`：健康约束和自动调整的具体医学阈值。
 
-- `id: UUID`
-- `deviceId: UUID`
-- `accessTokenHash: String`
-- `accessTokenExpiresAt: Instant`
-- `refreshTokenHash: String`
-- `refreshTokenExpiresAt: Instant`
-- `revokedAt: Instant?`
-- `createdAt: Instant`
-- `updatedAt: Instant`
-
-规则：
-
-- access token 短期有效。
-- refresh credential 长期、可轮换、可撤销。
-- 服务端只保存摘要，不保存明文。
-
-### CredentialResponseEnvelope
-
-设备凭据类 POST 的幂等重放信封。
-
-字段：
-
-- `id: UUID`
-- `operationType: String`
-- `idempotencyKey: String`
-- `requestHash: String`
-- `encryptedResponse: String`
-- `nonce: String`
-- `encryptionKeyVersion: String`
-- `expiresAt: Instant`
-- `createdAt: Instant`
-
-规则：
-
-- 只用于 bootstrap 消费、配对消费和 token refresh 的成功响应重放。
-- 使用 AES-GCM 保存加密响应体。
-- 加密密钥由环境变量提供，不在仓库内配置明文默认值。
-- 明文 access token、refresh credential 不进入普通幂等表、日志或审计。
-
-### AgentRun
-
-一次 Agent Runtime 技术运行，由 Java 作为权威系统创建、校验和保存。
-
-字段：
-
-- `id: UUID`
-- `userId: UUID`
-- `deviceId: UUID`
-- `sessionId: UUID?`
-- `triggerType: AgentTriggerType`
-- `status: AgentRunStatus`
-- `inputSummary: String`
-- `structuredOutput: JSONB?`
-- `validationResult: JSONB?`
-- `failureCode: String?`
-- `failureMessage: String?`
-- `createdAt: Instant`
-- `startedAt: Instant?`
-- `completedAt: Instant?`
-- `updatedAt: Instant`
-
-状态：
-
-- `CREATED`
-- `RUNNING`
-- `VALIDATING`
-- `READY_FOR_USER_REVIEW`
-- `FAILED`
-- `CANCELLED`
-- `EXPIRED`
-
-规则：
-
-- M2.5-A 不使用 `APPLIED`。
-- Java 在创建事务提交后异步调用 Python Runtime，再对结构化结果做校验。
-- 校验成功后进入 `READY_FOR_USER_REVIEW`。
-- 失败时保存脱敏 `failureCode` 和 `failureMessage`。
-- 关键 POST 使用幂等边界，重复请求不得创建重复运行或重复审计。
-
-### AgentToolCall
-
-Agent 工具调用可观测边界。M2.5-A 可没有真实业务工具调用，但保留运行审计结构。
-
-字段：
-
-- `id: UUID`
-- `runId: UUID`
-- `toolName: String`
-- `permissionLevel: AgentToolPermissionLevel`
-- `argumentSummary: String?`
-- `resultSummary: String?`
-- `status: AgentToolCallStatus`
-- `latencyMs: Long?`
-- `errorCode: String?`
-- `createdAt: Instant`
-
-## 8. 后续聚合占位
-
-M3 以后再实现：
-
-- `DailyExecution`
-- `TrainingSession`
-- `BodyMetricEntry`
-- `SymptomEntry`
-- `WeeklyAnalysis`
-- `AdjustmentProposal`
-- `AdjustmentDecision`
-
-## 8. OPEN 未确认事项
-
-- OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
-- OPEN: 是否在 M2A API 中提供审计查询；默认只写入，不提供查询接口。
-- OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
-- OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。
+未决事项不得在实现中自行定案。
