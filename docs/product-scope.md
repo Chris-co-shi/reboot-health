@@ -8,6 +8,16 @@
 
 本项目不做医学诊断，不替代医生意见。
 
+## 工程定位
+
+产品由三个核心部分协作：
+
+- Python Health Agent Harness：智能与任务编排核心。
+- Java Health Domain Kernel：事实、安全和领域状态权威。
+- Flutter Client：正式用户体验。
+
+项目的工程价值不只是调用模型，而是建设 Skills、Tools、Context、Memory、Approval、Trace、Evaluation 和 Recovery，使 Agent 在健康领域中可控制、可观察、可验证。
+
 ## 核心原则
 
 - 用户主要通过自然语言表达现状、目标、偏好和不适。
