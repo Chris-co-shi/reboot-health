@@ -49,11 +49,11 @@ flowchart LR
 
 | 组件 | 定位 | 权威边界 |
 |---|---|---|
-| `agent-runtime/` | **Python Health Agent Harness** | 智能控制流与任务编排核心 |
-| `backend/` | **Java Health Domain Kernel** | 已确认事实、安全规则和领域状态权威 |
-| `clients/flutter/` | **Flutter Client** | 正式用户交互与多平台体验 |
-| `frontend/` | **Vue Debug Tool** | 冻结的内部数据检查工具 |
-| `deploy/` | Deployment | Docker Compose 与环境变量入口 |
+| [`agent-runtime/`](agent-runtime/README.md) | **Python Health Agent Harness** | 智能控制流与任务编排核心 |
+| [`backend/`](backend/README.md) | **Java Health Domain Kernel** | 已确认事实、安全规则和领域状态权威 |
+| [`clients/flutter/`](clients/flutter/README.md) | **Flutter Client** | 正式用户交互与多平台体验 |
+| [`frontend/`](frontend/README.md) | **Vue Debug Tool** | 冻结的内部数据检查工具 |
+| [`deploy/`](deploy/README.md) | Deployment | Docker Compose 与环境变量入口 |
 | `docs/` | Documentation | 产品、架构、领域、安全和决策记录 |
 
 ## 🧠 Harness roadmap
