@@ -224,6 +224,16 @@ Goal：
 - `PLAN_DAY_DATE_OUT_OF_RANGE`
 - `PLAN_ITEM_NOT_FOUND`
 - `PLAN_ITEM_INVALID_VALUE`
+- `AGENT_RUN_NOT_FOUND`
+- `AGENT_RUNTIME_UNAVAILABLE`
+- `AGENT_RUNTIME_INVALID_OUTPUT`
+- `DEVICE_UNAUTHORIZED`
+- `DEVICE_NOT_FOUND`
+- `DEVICE_REVOKED`
+- `DEVICE_CREDENTIAL_INVALID`
+- `BOOTSTRAP_NOT_AVAILABLE`
+- `BOOTSTRAP_CODE_INVALID`
+- `PAIRING_SESSION_INVALID`
 - `ENUM_INVALID`
 - `VALIDATION_ERROR`
 - `DATA_CONFLICT`
@@ -339,7 +349,93 @@ DELETE 不要求 `Idempotency-Key`，但删除前必须校验版本仍为 `DRAFT
 - V5 增加 `idempotency_record` 的 PROCESSING/COMPLETED 字段完整性约束。
 - 重叠 `CONFIRMED` 周期必须返回 `PLAN_VERSION_PERIOD_OVERLAP`，不返回通用 `DATA_CONFLICT`。
 
-## 8. 后续 API 占位
+## 8. M2.5-A REST API
+
+### AgentRun
+
+```http
+POST /api/v1/agent-runs
+GET /api/v1/agent-runs/{runId}
+```
+
+规则：
+
+- `POST /api/v1/agent-runs` 必须由已授权设备调用。
+- `POST /api/v1/agent-runs` 必须带 `Idempotency-Key`。
+- `triggerType` 当前只要求支持 `TECHNICAL_SMOKE_TEST`。
+- Java 创建 `AgentRun`、调用 Python Runtime、校验结构化结果并保存。
+- Python Runtime 返回无效结构、超时或内部失败时，`AgentRun` 进入 `FAILED`，保存脱敏失败信息。
+- M2.5-A 不存在 `APPLIED` 状态，不执行任何业务确认命令。
+
+最小成功结构：
+
+```json
+{
+  "schemaVersion": "1.0",
+  "message": "Agent runtime is ready",
+  "cards": [
+    {
+      "type": "SYSTEM_STATUS",
+      "title": "AI教练服务已连接",
+      "content": "Java与Python运行链路正常"
+    }
+  ]
+}
+```
+
+### Device Bootstrap 与配对
+
+```http
+GET /api/v1/device-bootstrap/status
+POST /api/v1/device-bootstrap/consume
+POST /api/v1/devices/pairing-sessions
+POST /api/v1/devices/pair
+GET /api/v1/devices
+POST /api/v1/devices/{deviceId}/revoke
+POST /api/v1/devices/token/refresh
+```
+
+规则：
+
+- bootstrap code 只能由服务端 CLI 生成，普通 HTTP 接口不得生成。
+- `POST /api/v1/device-bootstrap/consume` 用于首台 Flutter 设备输入 code。
+- 后端只保存 bootstrap code 摘要，不保存明文。
+- bootstrap code 的有效期、长度和最大失败次数由配置项控制；当前实现提供安全默认值，不作为产品最终固定值。
+- 错误 code 会累计失败次数，达到配置上限后撤销当前 bootstrap session。
+- 消费成功后创建默认单用户、`TRUSTED_PRIMARY` 设备和独立设备凭据。
+- 已初始化后不能再次使用首台初始化入口。
+- `POST /api/v1/devices/pairing-sessions` 必须由已授权设备调用。
+- 配对码短时有效、一次性消费。
+- 二维码 payload 不携带长期 access token 或 refresh credential。
+- 设备可以单独撤销，撤销不影响其他设备。
+
+## 9. M2.5-A 数据库表
+
+新增 Flyway：
+
+- `V6__create_agent_and_device_tables.sql`
+
+核心表：
+
+- `app_user`：第一阶段默认单用户身份边界。
+- `bootstrap_session`：首台设备 bootstrap code 摘要和一次性消费状态。
+- `device`：设备身份、平台、状态和信任级别。
+- `device_credential`：access token 和 refresh credential 摘要。
+- `pairing_session`：后续设备短期一次性配对会话。
+- `agent_run`：Java 权威的 AgentRun 状态和结构化结果。
+- `agent_tool_call`：Agent 工具调用可观测边界。
+
+关键约束：
+
+- `app_user.singleton_key` 保证第一阶段只有一个默认用户。
+- `bootstrap_session.code_hash` 唯一且只保存摘要。
+- `bootstrap_session` 状态字段与 `consumed_at` 一致。
+- `device` 每个用户最多一个 `TRUSTED_PRIMARY`。
+- `device_credential` 的 token 摘要唯一，过期时间必须晚于创建时间。
+- `pairing_session` 状态字段与 `consumed_at`、`cancelled_at`、`created_device_id` 一致。
+- `agent_run` 不允许 `APPLIED` 状态，JSONB 字段存放结构化输出和校验结果。
+
+## 10. 后续 API 占位
 
 M2B 不实现以下 API：
 

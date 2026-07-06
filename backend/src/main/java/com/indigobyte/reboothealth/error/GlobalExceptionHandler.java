@@ -118,7 +118,15 @@ public class GlobalExceptionHandler {
                     PLAN_VERSION_REVISION_CONFLICT,
                     PLAN_VERSION_PERIOD_OVERLAP,
                     PLAN_VERSION_SOURCE_INVALID,
+                    DEVICE_REVOKED,
+                    BOOTSTRAP_NOT_AVAILABLE,
+                    BOOTSTRAP_CODE_INVALID,
+                    PAIRING_SESSION_INVALID,
                     DATA_CONFLICT -> HttpStatus.CONFLICT;
+            case DEVICE_UNAUTHORIZED,
+                    DEVICE_CREDENTIAL_INVALID -> HttpStatus.UNAUTHORIZED;
+            case AGENT_RUN_NOT_FOUND,
+                    DEVICE_NOT_FOUND -> HttpStatus.NOT_FOUND;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

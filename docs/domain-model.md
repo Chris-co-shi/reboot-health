@@ -253,7 +253,177 @@
 - RPE 存在时必须在 1 到 10。
 - 可选关联 `Goal`，只能关联 `ACTIVE` 或 `PAUSED` 目标。
 
-## 7. 后续聚合占位
+## 7. M2.5-A Agent 与设备模型
+
+M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 `PlanVersion` 的业务语义，只新增技术与产品骨架模型。
+
+### AppUser
+
+单用户身份边界，用于后续设备和 AgentRun 归属。
+
+字段：
+
+- `id: UUID`
+- `status: String`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+
+规则：
+
+- 第一阶段只创建一个默认用户。
+- 不实现注册、密码、找回密码、角色权限或多租户。
+
+### Device
+
+已登记设备。
+
+字段：
+
+- `id: UUID`
+- `userId: UUID`
+- `deviceName: String`
+- `platform: DevicePlatform`
+- `status: DeviceStatus`
+- `trustLevel: DeviceTrustLevel`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+- `lastSeenAt: Instant?`
+- `revokedAt: Instant?`
+
+规则：
+
+- 首台设备为 `TRUSTED_PRIMARY`。
+- 后续设备通过 `PairingSession` 创建。
+- 每台设备可单独撤销，撤销不影响其他设备。
+
+### BootstrapSession
+
+首台设备初始化用的一次性 code 会话。
+
+字段：
+
+- `id: UUID`
+- `codeHash: String`
+- `status: BootstrapStatus`
+- `expiresAt: Instant`
+- `consumedAt: Instant?`
+- `failureCount: Integer`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+
+规则：
+
+- bootstrap code 只能由服务端 CLI 生成。
+- 服务端只保存摘要，不保存明文。
+- code 短时有效、一次性消费。
+- 并发消费只能一个成功。
+- 初始化完成后永久关闭首台初始化入口。
+
+### PairingSession
+
+后续设备配对会话。
+
+字段：
+
+- `id: UUID`
+- `userId: UUID`
+- `createdByDeviceId: UUID`
+- `codeHash: String`
+- `qrPayload: String`
+- `status: PairingStatus`
+- `expiresAt: Instant`
+- `consumedAt: Instant?`
+- `cancelledAt: Instant?`
+- `createdDeviceId: UUID?`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+
+规则：
+
+- 只能由已授权设备创建。
+- 一次性消费，过期或已消费后不能重放。
+- 二维码或 payload 不携带长期访问令牌。
+
+### DeviceCredential
+
+设备凭据摘要。
+
+字段：
+
+- `id: UUID`
+- `deviceId: UUID`
+- `accessTokenHash: String`
+- `accessTokenExpiresAt: Instant`
+- `refreshTokenHash: String`
+- `refreshTokenExpiresAt: Instant`
+- `revokedAt: Instant?`
+- `createdAt: Instant`
+- `updatedAt: Instant`
+
+规则：
+
+- access token 短期有效。
+- refresh credential 长期、可轮换、可撤销。
+- 服务端只保存摘要，不保存明文。
+
+### AgentRun
+
+一次 Agent Runtime 技术运行，由 Java 作为权威系统创建、校验和保存。
+
+字段：
+
+- `id: UUID`
+- `userId: UUID`
+- `deviceId: UUID`
+- `sessionId: UUID?`
+- `triggerType: AgentTriggerType`
+- `status: AgentRunStatus`
+- `inputSummary: String`
+- `structuredOutput: JSONB?`
+- `validationResult: JSONB?`
+- `failureCode: String?`
+- `failureMessage: String?`
+- `createdAt: Instant`
+- `startedAt: Instant?`
+- `completedAt: Instant?`
+- `updatedAt: Instant`
+
+状态：
+
+- `CREATED`
+- `RUNNING`
+- `VALIDATING`
+- `READY_FOR_USER_REVIEW`
+- `FAILED`
+- `CANCELLED`
+- `EXPIRED`
+
+规则：
+
+- M2.5-A 不使用 `APPLIED`。
+- Java 调用 Python Runtime 后对结构化结果做校验。
+- 校验成功后进入 `READY_FOR_USER_REVIEW`。
+- 失败时保存脱敏 `failureCode` 和 `failureMessage`。
+- 关键 POST 使用幂等边界，重复请求不得创建重复运行或重复审计。
+
+### AgentToolCall
+
+Agent 工具调用可观测边界。M2.5-A 可没有真实业务工具调用，但保留运行审计结构。
+
+字段：
+
+- `id: UUID`
+- `runId: UUID`
+- `toolName: String`
+- `permissionLevel: AgentToolPermissionLevel`
+- `argumentSummary: String?`
+- `resultSummary: String?`
+- `status: AgentToolCallStatus`
+- `latencyMs: Long?`
+- `errorCode: String?`
+- `createdAt: Instant`
+
+## 8. 后续聚合占位
 
 M3 以后再实现：
 

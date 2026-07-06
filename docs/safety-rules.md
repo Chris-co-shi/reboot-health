@@ -120,7 +120,19 @@
 - 调整建议应用前必须有用户确认记录。
 - 审计记录必须追加写。
 
-## 5. OPEN 未确认事项
+## 5. M2.5-A 设备与 Agent 安全边界
+
+- 首台设备初始化只能由服务端 CLI 生成的一次性 bootstrap code 启动。
+- 普通 HTTP 接口不得生成 bootstrap code。
+- bootstrap code、access token、refresh credential 均不得明文入库、入日志或入审计。
+- 二维码和配对 payload 不得携带长期访问令牌。
+- 每台设备必须有独立 `deviceId` 和独立凭据，撤销某台设备不得影响其他设备。
+- 后续设备配对必须由已授权设备发起。
+- Java 是 AgentRun、设备确认、安全和业务状态的唯一权威。
+- Python Agent Runtime 不得连接 PostgreSQL，不得直接写业务表，不得发布计划。
+- M2.5-A 只允许 `AgentRun` 进入 `READY_FOR_USER_REVIEW`，不得出现 `APPLIED`。
+
+## 6. OPEN 未确认事项
 
 - OPEN: 疼痛评分具体阻断阈值。
 - OPEN: 连续睡眠不足的天数和分钟数阈值。

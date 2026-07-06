@@ -11,3 +11,4 @@
 - [0005 前端使用 pnpm](0005-frontend-pnpm.md)
 - [0006 Redis 暂不进入 MVP 业务流程](0006-redis-not-in-mvp.md)
 - [0007 计划版本状态和 POST 幂等](0007-plan-version-idempotency.md)
+- [0008 M2.5-A Flutter、Agent Runtime 与设备 Bootstrap](0008-m25a-flutter-agent-device-bootstrap.md)

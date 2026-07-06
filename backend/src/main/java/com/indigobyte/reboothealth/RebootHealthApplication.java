@@ -6,7 +6,9 @@ import org.mybatis.spring.annotation.MapperScan;
 
 @SpringBootApplication
 @MapperScan({
+        "com.indigobyte.reboothealth.agent.adapter.persistence",
         "com.indigobyte.reboothealth.audit.adapter",
+        "com.indigobyte.reboothealth.device.adapter.persistence",
         "com.indigobyte.reboothealth.goal.adapter.persistence",
         "com.indigobyte.reboothealth.idempotency.adapter.persistence",
         "com.indigobyte.reboothealth.plan.adapter.persistence",

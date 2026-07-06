@@ -14,6 +14,19 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Flutter / Dart
+clients/flutter/.dart_tool/
+clients/flutter/build/
+clients/flutter/.flutter-plugins
+clients/flutter/.flutter-plugins-dependencies
+clients/flutter/.packages
+
+# Python
+agent-runtime/.venv/
+agent-runtime/__pycache__/
+agent-runtime/.pytest_cache/
+agent-runtime/**/*.pyc
+
 # IDE
 .idea/
 .vscode/

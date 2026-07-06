@@ -12,10 +12,10 @@
 
 ## 2. 当前总状态
 
-- 当前阶段：M2B。
-- 当前目标：计划群组、计划版本、人工确认、复制草案和幂等 POST。
-- 当前业务状态：M2A 已完成功能验收；M2B 代码验收通过后等待用户页面人工验收。
-- 下一阶段：M3 今日执行和每日数据记录。
+- 当前阶段：M2.5-A。
+- 当前目标：Flutter 主客户端骨架、AgentRun 技术链路、Python Agent Runtime Model Mock、设备 bootstrap/配对/凭据和安全审计。
+- 当前业务状态：M2A、M2B 已完成功能验收；M2.5-A 实施后等待用户技术链路人工验收。
+- 下一阶段：M2.5-B AI 首次规划闭环。
 
 ## 3. 里程碑
 
@@ -143,6 +143,94 @@ M2A-FIX 验收要求：
 - `CARDIO`、`NUTRITION`、`MEASUREMENT` 类型能正常显示中文并刷新后保留。
 - 刷新页面后版本历史和详情仍存在。
 
+### M2.5-A 技术与产品骨架
+
+状态：IN_PROGRESS
+
+范围：
+
+- Flutter iOS、Android、macOS、Windows 主客户端最小骨架。
+- Flutter 调用 Java 后端，不直接调用 Python。
+- Java 创建并管理 `AgentRun`。
+- Java 调用 Python Agent Runtime。
+- Python 默认使用稳定 Model Mock 返回结构化结果。
+- Java 校验结构化结果并保存到 `AgentRun`。
+- Flutter 教练页展示 AgentRun 状态和结构化卡片。
+- 首台设备 bootstrap 初始化。
+- 后续设备配对。
+- 独立设备凭据和设备撤销。
+- 安全审计。
+
+不包含：
+
+- AI 首次规划访谈。
+- Goal 开放模型改造。
+- HealthConstraint 候选。
+- Program、Phase、WeeklyPlan 生成。
+- DailyAction、DailyActionExecution。
+- Observation。
+- HealthKit / Health Connect。
+- 真实云模型供应商接入。
+- Vue 新业务页面。
+
+自动化验证：
+
+- 后端 Maven 测试通过。
+- Python Runtime 单元测试通过。
+- Flutter `flutter analyze`、`flutter test` 和四端 debug build 在具备 Flutter SDK 的环境中执行。
+- Docker Compose 配置可校验。
+- `git diff --check` 通过。
+
+人工验收清单：
+
+- 通过服务端 CLI 生成 bootstrap code。
+- Flutter 输入 bootstrap code 初始化首台设备。
+- 错误、过期或已消费 code 被拒绝。
+- 初始化后不能再次初始化首台设备。
+- 已授权设备创建配对码。
+- 新设备通过配对码完成配对。
+- 撤销某台设备不影响其他设备。
+- 教练页点击“检查AI教练连接”后展示运行中、完成或失败状态。
+- 结构化卡片显示“AI教练服务已连接”。
+- 普通用户页面不展示 UUID、内部状态码或技术堆栈；开发调试信息必须折叠隔离。
+
+### M2.5-B AI 首次规划闭环
+
+状态：TODO
+
+范围：
+
+- 自然语言访谈。
+- AI 理解候选卡片。
+- 用户纠正和确认。
+- Goal 开放表达能力演进，但 Goal 仍是唯一事实来源。
+- HealthConstraint 候选确认，并保留开放表达字段。
+- Program 草案。
+- Phase 草案。
+- 首周 WeeklyPlan 草案。
+- 安全检查。
+- 用户确认后发布现有 PlanVersion。
+
+### M2.5-C 最小今日执行反馈
+
+状态：TODO
+
+范围：
+
+- 今日行动卡。
+- 完成、部分完成、跳过。
+- 最小 `DailyActionExecution`。
+- 训练结束一次简短反馈。
+- Agent 记忆候选。
+- 用户查看和纠正 AI 理解。
+
+不包含：
+
+- 完整 Observation。
+- 周分析。
+- 设备同步。
+- 训练播放器。
+
 ### M3 今日执行和每日数据记录
 
 状态：TODO
@@ -204,3 +292,9 @@ M2A-FIX 验收要求：
 - OPEN: 是否在 M2A API 中提供审计查询；默认只写入。
 - OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
 - OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。
+- OPEN: 云模型具体供应商和模型。
+- OPEN: 月度成本上限。
+- OPEN: 模型调用数据保留周期。
+- OPEN: 提醒静默时段和主动询问次数上限。
+- OPEN: HealthKit 和 Health Connect 插件选择。
+- OPEN: bootstrap code 的有效时长、字符格式和失败次数限制配置值。

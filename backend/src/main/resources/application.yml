@@ -32,6 +32,20 @@ management:
 
 app:
   default-timezone: ${APP_DEFAULT_TIMEZONE:Asia/Shanghai}
+  agent-runtime:
+    base-url: ${APP_AGENT_RUNTIME_BASE_URL:http://localhost:8090}
+    timeout-millis: ${APP_AGENT_RUNTIME_TIMEOUT_MILLIS:3000}
+  device:
+    bootstrap:
+      generate: ${APP_DEVICE_BOOTSTRAP_GENERATE:false}
+      code-ttl-minutes: ${APP_DEVICE_BOOTSTRAP_CODE_TTL_MINUTES:10}
+      code-length: ${APP_DEVICE_BOOTSTRAP_CODE_LENGTH:24}
+      max-failures: ${APP_DEVICE_BOOTSTRAP_MAX_FAILURES:5}
+    pairing:
+      code-ttl-minutes: ${APP_DEVICE_PAIRING_CODE_TTL_MINUTES:10}
+      code-length: ${APP_DEVICE_PAIRING_CODE_LENGTH:16}
+    access-token-ttl-minutes: ${APP_DEVICE_ACCESS_TOKEN_TTL_MINUTES:30}
+    refresh-token-ttl-days: ${APP_DEVICE_REFRESH_TOKEN_TTL_DAYS:30}
   ai:
     base-url: ${APP_AI_BASE_URL:https://api.openai.com/v1}
     api-key: ${APP_AI_API_KEY:}
