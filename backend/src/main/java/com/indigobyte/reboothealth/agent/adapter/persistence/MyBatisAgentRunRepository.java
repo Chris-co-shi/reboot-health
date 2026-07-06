@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.indigobyte.reboothealth.agent.domain.AgentRun;
 import com.indigobyte.reboothealth.agent.domain.AgentRunRepository;
 import com.indigobyte.reboothealth.agent.domain.AgentToolCall;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +27,11 @@ public class MyBatisAgentRunRepository implements AgentRunRepository {
     }
 
     @Override
+    public Optional<AgentRun> findByIdForUpdate(UUID runId) {
+        return Optional.ofNullable(AgentPersistenceConverter.toDomain(agentRunMapper.selectByIdForUpdate(runId)));
+    }
+
+    @Override
     public void insert(AgentRun run) {
         agentRunMapper.insertAgentRun(AgentPersistenceConverter.toDataObject(run));
     }
@@ -33,6 +39,11 @@ public class MyBatisAgentRunRepository implements AgentRunRepository {
     @Override
     public boolean update(AgentRun run) {
         return agentRunMapper.updateAgentRun(AgentPersistenceConverter.toDataObject(run)) == 1;
+    }
+
+    @Override
+    public int expireStaleRuns(Instant staleBefore, Instant now) {
+        return agentRunMapper.expireStaleRuns(staleBefore, now);
     }
 
     @Override

@@ -16,4 +16,6 @@ public interface IdempotencyRepository {
     Optional<IdempotencyRecord> findByKey(String key);
 
     boolean complete(String key, String resourceType, UUID resourceId, int responseStatus, Instant completedAt);
+
+    boolean deleteProcessing(String key);
 }

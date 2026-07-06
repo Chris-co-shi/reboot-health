@@ -7,13 +7,19 @@ class DeviceAuthApi {
   final ApiClient _client;
   final CredentialStore _credentialStore;
 
+  String createIdempotencyKey() {
+    return _client.createIdempotencyKey();
+  }
+
   Future<DeviceCredentials> consumeBootstrap({
     required String bootstrapCode,
     required String deviceName,
     required String platform,
+    String? idempotencyKey,
   }) async {
     final Map<String, Object?> json = await _client.postJson(
       '/api/v1/device-bootstrap/consume',
+      idempotencyKey: idempotencyKey ?? _client.createIdempotencyKey(),
       body: <String, Object?>{
         'bootstrapCode': bootstrapCode,
         'deviceName': deviceName,
@@ -37,9 +43,11 @@ class DeviceAuthApi {
     required String pairingCode,
     required String deviceName,
     required String platform,
+    String? idempotencyKey,
   }) async {
     final Map<String, Object?> json = await _client.postJson(
       '/api/v1/devices/pair',
+      idempotencyKey: idempotencyKey ?? _client.createIdempotencyKey(),
       body: <String, Object?>{
         'pairingCode': pairingCode,
         'deviceName': deviceName,
@@ -58,6 +66,14 @@ class DeviceAuthApi {
       return const <DeviceView>[];
     }
     return items.whereType<Map<String, Object?>>().map(DeviceView.fromJson).toList();
+  }
+
+  Future<void> revokeDevice(String deviceId) async {
+    await _client.postJson('/api/v1/devices/$deviceId/revoke', authorized: true);
+  }
+
+  Future<void> makePrimary(String deviceId) async {
+    await _client.postJson('/api/v1/devices/$deviceId/make-primary', authorized: true);
   }
 
   DeviceCredentials _credentialsFrom(Map<String, Object?> json) {
@@ -100,6 +116,7 @@ class DeviceView {
     required this.platform,
     required this.status,
     required this.trustLevel,
+    required this.currentDevice,
   });
 
   factory DeviceView.fromJson(Map<String, Object?> json) {
@@ -109,6 +126,7 @@ class DeviceView {
       platform: json['platform'] as String,
       status: json['status'] as String,
       trustLevel: json['trustLevel'] as String,
+      currentDevice: json['currentDevice'] as bool? ?? false,
     );
   }
 
@@ -117,4 +135,5 @@ class DeviceView {
   final String platform;
   final String status;
   final String trustLevel;
+  final bool currentDevice;
 }

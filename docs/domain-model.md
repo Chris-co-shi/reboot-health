@@ -295,6 +295,8 @@ M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 
 - 首台设备为 `TRUSTED_PRIMARY`。
 - 后续设备通过 `PairingSession` 创建。
 - 每台设备可单独撤销，撤销不影响其他设备。
+- 不能撤销最后一台 `ACTIVE` 可信设备。
+- `TRUSTED_PRIMARY` 必须先显式转移给另一台 `ACTIVE` 设备后才能撤销。
 
 ### BootstrapSession
 
@@ -329,7 +331,6 @@ M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 
 - `userId: UUID`
 - `createdByDeviceId: UUID`
 - `codeHash: String`
-- `qrPayload: String`
 - `status: PairingStatus`
 - `expiresAt: Instant`
 - `consumedAt: Instant?`
@@ -343,6 +344,7 @@ M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 
 - 只能由已授权设备创建。
 - 一次性消费，过期或已消费后不能重放。
 - 二维码或 payload 不携带长期访问令牌。
+- 二维码 payload 只在创建响应中临时生成，不写入数据库、日志或审计。
 
 ### DeviceCredential
 
@@ -365,6 +367,29 @@ M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 
 - access token 短期有效。
 - refresh credential 长期、可轮换、可撤销。
 - 服务端只保存摘要，不保存明文。
+
+### CredentialResponseEnvelope
+
+设备凭据类 POST 的幂等重放信封。
+
+字段：
+
+- `id: UUID`
+- `operationType: String`
+- `idempotencyKey: String`
+- `requestHash: String`
+- `encryptedResponse: String`
+- `nonce: String`
+- `encryptionKeyVersion: String`
+- `expiresAt: Instant`
+- `createdAt: Instant`
+
+规则：
+
+- 只用于 bootstrap 消费、配对消费和 token refresh 的成功响应重放。
+- 使用 AES-GCM 保存加密响应体。
+- 加密密钥由环境变量提供，不在仓库内配置明文默认值。
+- 明文 access token、refresh credential 不进入普通幂等表、日志或审计。
 
 ### AgentRun
 
@@ -401,7 +426,7 @@ M2.5-A 不改变现有 `UserProfile`、`Goal`、`HealthConstraint`、`Plan` 和 
 规则：
 
 - M2.5-A 不使用 `APPLIED`。
-- Java 调用 Python Runtime 后对结构化结果做校验。
+- Java 在创建事务提交后异步调用 Python Runtime，再对结构化结果做校验。
 - 校验成功后进入 `READY_FOR_USER_REVIEW`。
 - 失败时保存脱敏 `failureCode` 和 `failureMessage`。
 - 关键 POST 使用幂等边界，重复请求不得创建重复运行或重复审计。

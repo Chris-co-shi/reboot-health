@@ -6,6 +6,7 @@ import java.util.UUID;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Update;
 
 /**
@@ -40,4 +41,10 @@ public interface IdempotencyRecordMapper extends BaseMapper<IdempotencyRecordDat
                  @Param("resourceId") UUID resourceId,
                  @Param("responseStatus") int responseStatus,
                  @Param("completedAt") Instant completedAt);
+
+    @Delete("""
+            DELETE FROM idempotency_record
+            WHERE idempotency_key = #{key} AND state = 'PROCESSING'
+            """)
+    int deleteProcessing(@Param("key") String key);
 }

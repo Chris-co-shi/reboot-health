@@ -145,14 +145,14 @@ M2A-FIX 验收要求：
 
 ### M2.5-A 技术与产品骨架
 
-状态：IN_PROGRESS
+状态：IMPLEMENTED_WITH_BLOCKERS
 
 范围：
 
 - Flutter iOS、Android、macOS、Windows 主客户端最小骨架。
 - Flutter 调用 Java 后端，不直接调用 Python。
 - Java 创建并管理 `AgentRun`。
-- Java 调用 Python Agent Runtime。
+- Java 在短事务创建 `AgentRun` 后异步调用 Python Agent Runtime。
 - Python 默认使用稳定 Model Mock 返回结构化结果。
 - Java 校验结构化结果并保存到 `AgentRun`。
 - Flutter 教练页展示 AgentRun 状态和结构化卡片。
@@ -177,9 +177,13 @@ M2A-FIX 验收要求：
 
 - 后端 Maven 测试通过。
 - Python Runtime 单元测试通过。
-- Flutter `flutter analyze`、`flutter test` 和四端 debug build 在具备 Flutter SDK 的环境中执行。
+- Flutter `flutter analyze`、`flutter test` 和四端 debug build 需在具备 Flutter SDK 的环境中执行；当前本机 `flutter` 命令不可用，尚未验证。
 - Docker Compose 配置可校验。
 - `git diff --check` 通过。
+
+当前阻塞：
+
+- 当前环境缺少 Flutter SDK，无法执行 `flutter create` 生成真实四端 runner，也无法验证 `flutter_secure_storage` 四端插件兼容性和四端 debug build。
 
 人工验收清单：
 

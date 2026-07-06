@@ -3,6 +3,7 @@ package com.indigobyte.reboothealth.device.adapter.persistence;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.indigobyte.reboothealth.device.domain.AppUser;
 import com.indigobyte.reboothealth.device.domain.BootstrapSession;
+import com.indigobyte.reboothealth.device.domain.CredentialResponseEnvelope;
 import com.indigobyte.reboothealth.device.domain.Device;
 import com.indigobyte.reboothealth.device.domain.DeviceCredential;
 import com.indigobyte.reboothealth.device.domain.DeviceRepository;
@@ -24,6 +25,7 @@ public class MyBatisDeviceRepository implements DeviceRepository {
     private final BootstrapSessionMapper bootstrapSessionMapper;
     private final DeviceMapper deviceMapper;
     private final DeviceCredentialMapper credentialMapper;
+    private final CredentialResponseEnvelopeMapper credentialResponseEnvelopeMapper;
     private final PairingSessionMapper pairingSessionMapper;
 
     @Override
@@ -90,6 +92,19 @@ public class MyBatisDeviceRepository implements DeviceRepository {
     }
 
     @Override
+    public Optional<Device> findPrimaryDeviceForUpdate(UUID userId) {
+        return Optional.ofNullable(DevicePersistenceConverter.toDomain(deviceMapper.selectPrimaryForUpdate(userId)));
+    }
+
+    @Override
+    public int countActiveDevices(UUID userId) {
+        LambdaQueryWrapper<DeviceDataObject> query = new LambdaQueryWrapper<>();
+        query.eq(DeviceDataObject::getUserId, userId)
+                .eq(DeviceDataObject::getStatus, "ACTIVE");
+        return Math.toIntExact(deviceMapper.selectCount(query));
+    }
+
+    @Override
     public void insertCredential(DeviceCredential credential) {
         credentialMapper.insert(DevicePersistenceConverter.toDataObject(credential));
     }
@@ -116,6 +131,19 @@ public class MyBatisDeviceRepository implements DeviceRepository {
     public Optional<DeviceCredential> findCredentialByDeviceIdForUpdate(UUID deviceId) {
         return Optional.ofNullable(DevicePersistenceConverter.toDomain(
                 credentialMapper.selectByDeviceIdForUpdate(deviceId)));
+    }
+
+    @Override
+    public void insertCredentialResponseEnvelope(CredentialResponseEnvelope envelope) {
+        credentialResponseEnvelopeMapper.insert(DevicePersistenceConverter.toDataObject(envelope));
+    }
+
+    @Override
+    public Optional<CredentialResponseEnvelope> findCredentialResponseEnvelopeByKey(String idempotencyKey) {
+        LambdaQueryWrapper<CredentialResponseEnvelopeDataObject> query = new LambdaQueryWrapper<>();
+        query.eq(CredentialResponseEnvelopeDataObject::getIdempotencyKey, idempotencyKey);
+        return Optional.ofNullable(DevicePersistenceConverter.toDomain(
+                credentialResponseEnvelopeMapper.selectOne(query)));
     }
 
     @Override

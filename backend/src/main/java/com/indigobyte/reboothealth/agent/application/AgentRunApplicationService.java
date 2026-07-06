@@ -16,10 +16,10 @@ import com.indigobyte.reboothealth.idempotency.domain.IdempotencyRecord;
 import com.indigobyte.reboothealth.idempotency.domain.IdempotencyState;
 import java.time.Clock;
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,7 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * AgentRun 应用服务。
  *
- * <p>负责创建运行、调用 Python Runtime、校验结构化结果、保存状态和接入幂等；不执行任何业务确认命令。</p>
+ * <p>负责创建运行、查询状态和接入幂等；Python Runtime 调用由事务提交后的后台 Worker 执行。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -37,11 +37,11 @@ public class AgentRunApplicationService {
     private static final String ENTITY_TYPE = "AgentRun";
 
     private final AgentRunRepository repository;
-    private final AgentRuntimeClient runtimeClient;
     private final IdempotencyApplicationService idempotencyService;
     private final AuditLogAppender auditLogAppender;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public IdempotentAgentRunResult create(String idempotencyKey, DevicePrincipal principal, CreateAgentRunCommand command) {
@@ -60,36 +60,9 @@ public class AgentRunApplicationService {
                 command.triggerType(), command.inputSummary(), now);
         repository.insert(run);
         auditLogAppender.append("AGENT_RUN_CREATED", ENTITY_TYPE, run.getId(), null, redactedRun(run));
-
-        run.markRunning(Instant.now(clock));
-        repository.update(run);
-        try {
-            AgentRuntimeResponse response = runtimeClient.execute(new AgentRuntimeRequest(
-                    run.getId(),
-                    run.getUserId(),
-                    run.getDeviceId(),
-                    run.getTriggerType().name(),
-                    run.getInputSummary(),
-                    command.mockMode()
-            ));
-            run.markValidating(Instant.now(clock));
-            repository.update(run);
-            ValidationOutcome validation = validate(response);
-            run.markReady(toJson(response), toJson(validation), Instant.now(clock));
-            repository.update(run);
-            auditLogAppender.append("AGENT_RUN_READY_FOR_USER_REVIEW", ENTITY_TYPE,
-                    run.getId(), null, redactedRun(run));
-        } catch (AgentRuntimeException ex) {
-            run.markFailed(ex.code(), sanitize(ex.getMessage()), Instant.now(clock));
-            repository.update(run);
-            auditLogAppender.append("AGENT_RUN_FAILED", ENTITY_TYPE, run.getId(), null, redactedRun(run));
-        } catch (RuntimeException ex) {
-            run.markFailed(ErrorCode.AGENT_RUNTIME_UNAVAILABLE.name(), "Agent Runtime 调用失败", Instant.now(clock));
-            repository.update(run);
-            auditLogAppender.append("AGENT_RUN_FAILED", ENTITY_TYPE, run.getId(), null, redactedRun(run));
-        }
-        idempotencyService.complete(idempotencyKey, RESOURCE_TYPE, run.getId(), HttpStatus.CREATED.value());
-        return new IdempotentAgentRunResult(toDetail(run), HttpStatus.CREATED.value(), false);
+        idempotencyService.complete(idempotencyKey, RESOURCE_TYPE, run.getId(), HttpStatus.ACCEPTED.value());
+        eventPublisher.publishEvent(new AgentRunCreatedEvent(run.getId(), command.mockMode()));
+        return new IdempotentAgentRunResult(toDetail(run), HttpStatus.ACCEPTED.value(), false);
     }
 
     @Transactional(readOnly = true)
@@ -101,25 +74,6 @@ public class AgentRunApplicationService {
             throw new ApplicationException(ErrorCode.AGENT_RUN_NOT_FOUND, "AgentRun 不存在", HttpStatus.NOT_FOUND);
         }
         return toDetail(run);
-    }
-
-    private ValidationOutcome validate(AgentRuntimeResponse response) {
-        if (response == null
-                || !"1.0".equals(response.schemaVersion())
-                || response.message() == null
-                || response.message().isBlank()
-                || response.cards() == null
-                || response.cards().isEmpty()) {
-            throw new AgentRuntimeException(ErrorCode.AGENT_RUNTIME_INVALID_OUTPUT.name(), "Agent Runtime 输出结构无效");
-        }
-        for (AgentRuntimeResponse.Card card : response.cards()) {
-            if (card.type() == null || card.type().isBlank()
-                    || card.title() == null || card.title().isBlank()
-                    || card.content() == null || card.content().isBlank()) {
-                throw new AgentRuntimeException(ErrorCode.AGENT_RUNTIME_INVALID_OUTPUT.name(), "Agent Runtime 卡片结构无效");
-            }
-        }
-        return new ValidationOutcome(true, List.of());
     }
 
     private AgentRunDetail toDetail(AgentRun run) {
@@ -153,14 +107,6 @@ public class AgentRunApplicationService {
         }
     }
 
-    private String toJson(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (JsonProcessingException ex) {
-            throw new ApplicationException(ErrorCode.INTERNAL_ERROR, "AgentRun JSON 序列化失败", HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-    }
-
     private Map<String, Object> redactedRun(AgentRun run) {
         return Map.of(
                 "runId", run.getId(),
@@ -171,13 +117,6 @@ public class AgentRunApplicationService {
         );
     }
 
-    private String sanitize(String message) {
-        if (message == null || message.isBlank()) {
-            return "Agent Runtime 调用失败";
-        }
-        return message.length() > 300 ? message.substring(0, 300) : message;
-    }
-
     public record CreateAgentRunCommand(UUID sessionId, AgentTriggerType triggerType,
                                         String inputSummary, String mockMode) {
     }
@@ -185,6 +124,4 @@ public class AgentRunApplicationService {
     public record IdempotentAgentRunResult(AgentRunDetail body, int responseStatus, boolean replayed) {
     }
 
-    private record ValidationOutcome(boolean valid, List<String> issues) {
-    }
 }

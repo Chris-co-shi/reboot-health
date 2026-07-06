@@ -11,9 +11,13 @@ public interface AgentRunRepository {
 
     Optional<AgentRun> findById(UUID runId);
 
+    Optional<AgentRun> findByIdForUpdate(UUID runId);
+
     void insert(AgentRun run);
 
     boolean update(AgentRun run);
+
+    int expireStaleRuns(java.time.Instant staleBefore, java.time.Instant now);
 
     void insertToolCall(AgentToolCall toolCall);
 

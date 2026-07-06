@@ -51,6 +51,19 @@ class ServerTest(unittest.TestCase):
             self.execute({"mockMode": "failure"})
         self.assertEqual(error.exception.code, 500)
 
+    def test_execute_rejects_missing_required_input(self) -> None:
+        request = urllib.request.Request(
+            f"{self.base_url}/internal/v1/agent-runs/execute",
+            data=json.dumps({"runId": "00000000-0000-0000-0000-000000000001"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=2)
+
+        self.assertEqual(error.exception.code, 400)
+
     def execute(self, extra: dict[str, str]) -> dict[str, object]:
         payload = {
             "runId": "00000000-0000-0000-0000-000000000001",

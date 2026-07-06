@@ -125,10 +125,13 @@
 - 首台设备初始化只能由服务端 CLI 生成的一次性 bootstrap code 启动。
 - 普通 HTTP 接口不得生成 bootstrap code。
 - bootstrap code、access token、refresh credential 均不得明文入库、入日志或入审计。
-- 二维码和配对 payload 不得携带长期访问令牌。
+- 二维码和配对 payload 不得携带长期访问令牌，配对 payload 不得落库。
+- bootstrap 消费、配对消费和 token refresh 的幂等重放必须通过加密响应信封恢复第一次签发的凭据，不得把明文凭据写入普通幂等表。
+- 除 bootstrap 状态、bootstrap 消费、配对消费、token refresh 和健康检查外，所有 `/api/v1/**` 默认要求设备 access token。
 - 每台设备必须有独立 `deviceId` 和独立凭据，撤销某台设备不得影响其他设备。
+- 不得撤销最后一台活跃可信设备；主设备必须先显式转移后才能撤销。
 - 后续设备配对必须由已授权设备发起。
-- Java 是 AgentRun、设备确认、安全和业务状态的唯一权威。
+- Java 是 AgentRun、设备确认、安全和业务状态的唯一权威；创建 AgentRun 后由 Java 异步调用 Python Runtime。
 - Python Agent Runtime 不得连接 PostgreSQL，不得直接写业务表，不得发布计划。
 - M2.5-A 只允许 `AgentRun` 进入 `READY_FOR_USER_REVIEW`，不得出现 `APPLIED`。
 

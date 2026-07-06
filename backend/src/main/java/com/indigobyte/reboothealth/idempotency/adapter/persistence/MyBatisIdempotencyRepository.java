@@ -34,4 +34,9 @@ public class MyBatisIdempotencyRepository implements IdempotencyRepository {
     public boolean complete(String key, String resourceType, UUID resourceId, int responseStatus, Instant completedAt) {
         return mapper.complete(key, resourceType, resourceId, responseStatus, completedAt) == 1;
     }
+
+    @Override
+    public boolean deleteProcessing(String key) {
+        return mapper.deleteProcessing(key) == 1;
+    }
 }

@@ -2,9 +2,9 @@ spring:
   application:
     name: reboot-health
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://100.101.189.22:5432/reboot_health}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres123}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/reboot_health}
+    username: ${SPRING_DATASOURCE_USERNAME:reboot_health}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
   flyway:
     enabled: ${SPRING_FLYWAY_ENABLED:true}
@@ -41,14 +41,16 @@ app:
       code-ttl-minutes: ${APP_DEVICE_BOOTSTRAP_CODE_TTL_MINUTES:10}
       code-length: ${APP_DEVICE_BOOTSTRAP_CODE_LENGTH:24}
       max-failures: ${APP_DEVICE_BOOTSTRAP_MAX_FAILURES:5}
+    auth:
+      enabled: ${APP_DEVICE_AUTH_ENABLED:true}
     pairing:
       code-ttl-minutes: ${APP_DEVICE_PAIRING_CODE_TTL_MINUTES:10}
       code-length: ${APP_DEVICE_PAIRING_CODE_LENGTH:16}
+    credential-envelope:
+      key-base64: ${APP_DEVICE_CREDENTIAL_ENVELOPE_KEY_BASE64:}
+      key-version: ${APP_DEVICE_CREDENTIAL_ENVELOPE_KEY_VERSION:local-v1}
+      replay-ttl-minutes: ${APP_DEVICE_CREDENTIAL_ENVELOPE_REPLAY_TTL_MINUTES:30}
     access-token-ttl-minutes: ${APP_DEVICE_ACCESS_TOKEN_TTL_MINUTES:30}
     refresh-token-ttl-days: ${APP_DEVICE_REFRESH_TOKEN_TTL_DAYS:30}
-  ai:
-    base-url: ${APP_AI_BASE_URL:https://api.openai.com/v1}
-    api-key: ${APP_AI_API_KEY:}
-    model: ${APP_AI_MODEL:gpt-4.1-mini}
   safety:
     mode: conservative-defaults

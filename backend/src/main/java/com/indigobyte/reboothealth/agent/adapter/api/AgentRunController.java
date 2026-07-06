@@ -4,7 +4,6 @@ import com.indigobyte.reboothealth.agent.adapter.api.AgentRunRequests.CreateAgen
 import com.indigobyte.reboothealth.agent.application.AgentRunApplicationService;
 import com.indigobyte.reboothealth.agent.application.AgentRunApplicationService.CreateAgentRunCommand;
 import com.indigobyte.reboothealth.agent.application.AgentRunApplicationService.IdempotentAgentRunResult;
-import com.indigobyte.reboothealth.device.application.DeviceApplicationService;
 import com.indigobyte.reboothealth.device.domain.DevicePrincipal;
 import jakarta.validation.Valid;
 import java.util.UUID;
@@ -28,20 +27,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class AgentRunController {
 
     private final AgentRunApplicationService agentRunService;
-    private final DeviceApplicationService deviceService;
 
-    public AgentRunController(AgentRunApplicationService agentRunService, DeviceApplicationService deviceService) {
+    public AgentRunController(AgentRunApplicationService agentRunService) {
         this.agentRunService = agentRunService;
-        this.deviceService = deviceService;
     }
 
     @PostMapping
     public ResponseEntity<AgentRunResponse> create(
-            @RequestHeader(value = "Authorization", required = false) String authorizationHeader,
+            DevicePrincipal principal,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
             @Valid @RequestBody CreateAgentRunRequest request
     ) {
-        DevicePrincipal principal = deviceService.authenticate(authorizationHeader);
         IdempotentAgentRunResult result = agentRunService.create(
                 idempotencyKey,
                 principal,
@@ -56,9 +52,8 @@ public class AgentRunController {
     @GetMapping("/{runId}")
     public AgentRunResponse get(
             @PathVariable UUID runId,
-            @RequestHeader(value = "Authorization", required = false) String authorizationHeader
+            DevicePrincipal principal
     ) {
-        DevicePrincipal principal = deviceService.authenticate(authorizationHeader);
         return AgentRunResponse.from(agentRunService.get(runId, principal));
     }
 }

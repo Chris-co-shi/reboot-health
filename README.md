@@ -6,7 +6,7 @@
 
 ## 当前阶段
 
-当前处于 **M2.5-A：技术与产品骨架**。
+当前处于 **M2.5-A：技术与产品骨架，后端与 Python 已通过自动化验证，Flutter SDK 环境待补齐**。
 
 代码目标：
 
@@ -19,9 +19,9 @@
 - 当前计划按日期查询。
 - M2B POST 接口的 `Idempotency-Key` 幂等控制。
 - Flutter 主客户端骨架。
-- Java 创建并管理 `AgentRun`。
+- Java 短事务创建 `AgentRun`，提交后异步调用 Python Runtime。
 - Python Agent Runtime 使用 Model Mock 返回稳定结构化结果。
-- 首台设备 bootstrap 初始化、后续设备配对、设备凭据和安全审计。
+- 首台设备 bootstrap 初始化、后续设备配对、设备凭据、主设备转移、设备撤销和安全审计。
 
 不包含：
 
@@ -68,10 +68,18 @@ Flutter：
 
 ```bash
 cd clients/flutter
+flutter doctor -v
+flutter create --platforms=ios,android,macos,windows .
 flutter pub get
 flutter analyze
 flutter test
+flutter build apk --debug
+flutter build ios --debug --no-codesign
+flutter build macos --debug
+flutter build windows --debug
 ```
+
+当前环境未安装 `flutter` 命令，因此 Flutter runner 生成、四端构建和 `flutter_secure_storage` 四端验证尚未完成。
 
 Python Agent Runtime：
 
@@ -91,7 +99,7 @@ docker compose -f deploy/docker-compose.yml config
 - M1：文档和工程骨架，已完成。
 - M2A：用户档案、健康约束、目标管理，已完成。
 - M2B：计划、计划版本和人工确认，已完成。
-- M2.5-A：Flutter、AgentRun、Python Runtime、设备认证骨架，实施中。
+- M2.5-A：Flutter、AgentRun、Python Runtime、设备认证骨架，后端和 Python 代码验收通过，Flutter SDK 环境待补齐。
 - M2.5-B：AI 首次规划闭环，未开始。
 - M2.5-C：最小今日执行反馈，未开始。
 - M3：正式今日执行和每日数据记录。

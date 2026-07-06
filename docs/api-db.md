@@ -362,8 +362,10 @@ GET /api/v1/agent-runs/{runId}
 
 - `POST /api/v1/agent-runs` 必须由已授权设备调用。
 - `POST /api/v1/agent-runs` 必须带 `Idempotency-Key`。
+- 创建请求只在短事务中写入 `CREATED` 并返回 `202 Accepted`；事务提交后由受控 `TaskExecutor` 异步调用 Python Runtime。
+- 同一 `Idempotency-Key` 重放只返回第一次创建的 `AgentRun`，不重复调 Python、不重复写审计。
 - `triggerType` 当前只要求支持 `TECHNICAL_SMOKE_TEST`。
-- Java 创建 `AgentRun`、调用 Python Runtime、校验结构化结果并保存。
+- Java 创建 `AgentRun`、异步调用 Python Runtime、校验结构化结果并保存。
 - Python Runtime 返回无效结构、超时或内部失败时，`AgentRun` 进入 `FAILED`，保存脱敏失败信息。
 - M2.5-A 不存在 `APPLIED` 状态，不执行任何业务确认命令。
 
@@ -392,6 +394,7 @@ POST /api/v1/devices/pairing-sessions
 POST /api/v1/devices/pair
 GET /api/v1/devices
 POST /api/v1/devices/{deviceId}/revoke
+POST /api/v1/devices/{deviceId}/make-primary
 POST /api/v1/devices/token/refresh
 ```
 
@@ -403,17 +406,34 @@ POST /api/v1/devices/token/refresh
 - bootstrap code 的有效期、长度和最大失败次数由配置项控制；当前实现提供安全默认值，不作为产品最终固定值。
 - 错误 code 会累计失败次数，达到配置上限后撤销当前 bootstrap session。
 - 消费成功后创建默认单用户、`TRUSTED_PRIMARY` 设备和独立设备凭据。
+- `POST /api/v1/device-bootstrap/consume`、`POST /api/v1/devices/pair`、`POST /api/v1/devices/token/refresh` 必须带 `Idempotency-Key`。
+- 这三个接口的同 key 重放返回第一次签发的同一组凭据；响应体只加密保存在 `credential_response_envelope`，普通幂等表不保存明文响应。
 - 已初始化后不能再次使用首台初始化入口。
 - `POST /api/v1/devices/pairing-sessions` 必须由已授权设备调用。
 - 配对码短时有效、一次性消费。
-- 二维码 payload 不携带长期 access token 或 refresh credential。
+- 二维码 payload 不携带长期 access token 或 refresh credential，并且不落库、不进入审计。
+- `GET /api/v1/devices` 返回 `{ "items": [...] }`，每个设备包含 `currentDevice` 标记。
+- 不能撤销最后一台 `ACTIVE` 可信设备。
+- `TRUSTED_PRIMARY` 设备必须先通过 `make-primary` 显式转移后才能撤销。
 - 设备可以单独撤销，撤销不影响其他设备。
+
+### 设备认证白名单
+
+除以下接口外，所有 `/api/v1/**` 默认要求有效设备 access token：
+
+- `GET /api/v1/device-bootstrap/status`
+- `POST /api/v1/device-bootstrap/consume`
+- `POST /api/v1/devices/pair`
+- `POST /api/v1/devices/token/refresh`
+
+`GET /actuator/health/**` 和 `GET /actuator/info` 保持公开健康检查。
 
 ## 9. M2.5-A 数据库表
 
 新增 Flyway：
 
 - `V6__create_agent_and_device_tables.sql`
+- `V7__strengthen_m25a_device_and_agent.sql`
 
 核心表：
 
@@ -422,6 +442,7 @@ POST /api/v1/devices/token/refresh
 - `device`：设备身份、平台、状态和信任级别。
 - `device_credential`：access token 和 refresh credential 摘要。
 - `pairing_session`：后续设备短期一次性配对会话。
+- `credential_response_envelope`：设备凭据类 POST 的加密幂等响应信封。
 - `agent_run`：Java 权威的 AgentRun 状态和结构化结果。
 - `agent_tool_call`：Agent 工具调用可观测边界。
 
@@ -432,7 +453,9 @@ POST /api/v1/devices/token/refresh
 - `bootstrap_session` 状态字段与 `consumed_at` 一致。
 - `device` 每个用户最多一个 `TRUSTED_PRIMARY`。
 - `device_credential` 的 token 摘要唯一，过期时间必须晚于创建时间。
+- `pairing_session.code_hash` 唯一，且不保存二维码 payload 明文。
 - `pairing_session` 状态字段与 `consumed_at`、`cancelled_at`、`created_device_id` 一致。
+- `credential_response_envelope.idempotency_key` 唯一，响应体使用 AES-GCM 加密，密钥由环境变量提供。
 - `agent_run` 不允许 `APPLIED` 状态，JSONB 字段存放结构化输出和校验结果。
 
 ## 10. 后续 API 占位

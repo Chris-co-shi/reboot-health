@@ -32,7 +32,7 @@ public class IdempotencyApplicationService {
         Instant now = Instant.now(clock);
         boolean inserted = repository.insertProcessing(IdempotencyRecord.processing(key, operationCode, requestHash, now));
         if (inserted) {
-            return new IdempotencyStart(true, null);
+            return new IdempotencyStart(true, null, requestHash);
         }
         IdempotencyRecord existing = repository.findByKey(key).orElseThrow(() -> new ApplicationException(
                 ErrorCode.DATA_CONFLICT, "幂等记录读取失败，请重试", HttpStatus.CONFLICT));
@@ -40,7 +40,7 @@ public class IdempotencyApplicationService {
             throw new ApplicationException(ErrorCode.IDEMPOTENCY_KEY_REUSED,
                     "Idempotency-Key 已被不同请求使用", HttpStatus.CONFLICT);
         }
-        return new IdempotencyStart(false, existing);
+        return new IdempotencyStart(false, existing, requestHash);
     }
 
     public void complete(String key, String resourceType, UUID resourceId, int responseStatus) {
@@ -48,5 +48,9 @@ public class IdempotencyApplicationService {
         if (!completed) {
             throw new ApplicationException(ErrorCode.DATA_CONFLICT, "幂等记录完成状态更新失败", HttpStatus.CONFLICT);
         }
+    }
+
+    public void discardProcessing(String key) {
+        repository.deleteProcessing(key);
     }
 }

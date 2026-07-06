@@ -76,6 +76,7 @@ Persistence Adapter -> Repository Port
 - M2B 的关键 POST 使用 `Idempotency-Key`，幂等记录、业务修改和审计必须同事务提交。
 - Java 是业务事实、AgentRun、设备确认、安全和状态的唯一权威。
 - Python Agent Runtime 不连接 PostgreSQL，不直接写业务表，不发布计划。
+- M2.5-A 只使用 Model Mock，不配置真实云模型供应商。
 
 ### Agent Runtime 边界
 
@@ -84,6 +85,7 @@ M2.5-A 新增独立 `agent-runtime/`：
 - Python 3.12 兼容。
 - 提供 `GET /health` 和 `POST /internal/v1/agent-runs/execute`。
 - 默认 `MockProvider`，不依赖外部网络或真实模型 API Key。
+- 创建 `AgentRun` 的 HTTP 请求只写入 `CREATED` 并返回 `202 Accepted`；事务提交后由受控 `TaskExecutor` 调用 Python。
 - 返回结构化 DTO，由 Java 校验后保存到 `AgentRun`。
 - 仅记录 `runId` 等运行标识，不保存密钥、完整 HTTP Header 或敏感原文。
 
@@ -103,7 +105,9 @@ M2.5-A 增加私有单用户设备认证，不扩展为完整 IAM：
 - bootstrap code 的有效期、长度和最大失败次数由配置控制，当前默认值只是实现默认配置。
 - 每台设备拥有独立 `deviceId` 和独立凭据，可单独撤销。
 - 后续设备只能由已授权设备创建 `PairingSession` 后配对。
-- 二维码或配对 payload 不携带长期访问令牌。
+- 二维码或配对 payload 不携带长期访问令牌，并且不写入数据库或审计。
+- bootstrap 消费、配对消费和 token refresh 的同 key 成功重放通过 AES-GCM 加密响应信封恢复第一次签发的凭据。
+- 不能撤销最后一台活跃可信设备；主设备撤销前必须显式转移。
 - 安全审计不得记录明文 code、access token、refresh credential 或完整 Authorization Header。
 
 ## 4. 客户端架构
@@ -175,6 +179,7 @@ M2.5-A 增加私有单用户设备认证，不扩展为完整 IAM：
 - 审计记录追加写。
 - AI 原始响应和校验后的结构化结果分开保存。
 - `AgentRun`、`AgentToolCall`、`Device`、`PairingSession` 和 `DeviceCredential` 通过 V6 迁移新增。
+- V7 移除 `pairing_session.qr_payload`，增加 code hash 唯一约束和 `credential_response_envelope`。
 - 设备安全凭据只保存摘要，不保存明文令牌。
 
 ## 6. 配置策略
@@ -182,8 +187,8 @@ M2.5-A 增加私有单用户设备认证，不扩展为完整 IAM：
 配置通过环境变量提供：
 
 - 数据库连接地址、用户名和密码。
-- AI 兼容接口地址、API Key 和模型名。
 - Python Agent Runtime 地址。
+- 设备凭据响应信封 AES-GCM 密钥。
 - bootstrap code、pairing code、access token 和 refresh credential 的有效期与长度默认配置。
 - 服务端口和安全边界配置。
 
@@ -193,6 +198,7 @@ M2.5-A 增加私有单用户设备认证，不扩展为完整 IAM：
 - 文档、测试和日志不得输出完整密钥或真实数据库密码。
 - 健康数据不得写入普通调试日志。
 - M2.5-A 默认 Model Mock，不配置真实模型供应商。
+- 真实模型供应商、API Key 和模型名留到 M2.5-B 以后确认。
 
 ## 7. OPEN 未确认事项
 

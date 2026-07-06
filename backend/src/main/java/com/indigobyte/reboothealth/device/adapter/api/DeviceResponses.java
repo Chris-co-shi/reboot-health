@@ -5,6 +5,7 @@ import com.indigobyte.reboothealth.device.application.DeviceApplicationService.D
 import com.indigobyte.reboothealth.device.application.DeviceApplicationService.DeviceView;
 import com.indigobyte.reboothealth.device.application.DeviceApplicationService.PairingSessionView;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -49,12 +50,16 @@ public final class DeviceResponses {
         }
     }
 
+    public record DeviceListResponse(List<DeviceResponse> items) {
+    }
+
     public record DeviceResponse(UUID id, String deviceName, String platform, String status,
+                                 boolean currentDevice,
                                  String trustLevel, Instant createdAt, Instant lastSeenAt,
                                  Instant revokedAt) {
         static DeviceResponse from(DeviceView view) {
             return new DeviceResponse(view.id(), view.deviceName(), view.platform().name(),
-                    view.status(), view.trustLevel(), view.createdAt(), view.lastSeenAt(),
+                    view.status(), view.currentDevice(), view.trustLevel(), view.createdAt(), view.lastSeenAt(),
                     view.revokedAt());
         }
     }

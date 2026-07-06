@@ -38,6 +38,7 @@ public class DeviceApplicationService {
 
     private final DeviceRepository repository;
     private final DeviceTokenService tokenService;
+    private final CredentialResponseDeduplicator credentialResponseDeduplicator;
     private final AuditLogAppender auditLogAppender;
     private final SecurityAuditAppender securityAuditAppender;
     private final Clock clock;
@@ -66,11 +67,19 @@ public class DeviceApplicationService {
             throw new ApplicationException(ErrorCode.BOOTSTRAP_NOT_AVAILABLE,
                     "首台设备已初始化，不能再次生成 bootstrap code", HttpStatus.CONFLICT);
         }
-        if (repository.findActiveBootstrapForUpdate().isPresent()) {
-            throw new ApplicationException(ErrorCode.BOOTSTRAP_NOT_AVAILABLE,
-                    "已有未消费的 bootstrap code", HttpStatus.CONFLICT);
-        }
         Instant now = Instant.now(clock);
+        var activeBootstrap = repository.findActiveBootstrapForUpdate();
+        if (activeBootstrap.isPresent()) {
+            BootstrapSession active = activeBootstrap.orElseThrow();
+            if (active.isUsable(now)) {
+                throw new ApplicationException(ErrorCode.BOOTSTRAP_NOT_AVAILABLE,
+                        "已有未消费的 bootstrap code", HttpStatus.CONFLICT);
+            }
+            active.markExpired(now);
+            repository.updateBootstrap(active);
+            auditLogAppender.append("BOOTSTRAP_CODE_EXPIRED", SECURITY_EVENT, active.getId(), null,
+                    Map.of("expiresAt", active.getExpiresAt()));
+        }
         String code = tokenService.generateCode(bootstrapCodeLength);
         BootstrapSession session = BootstrapSession.create(
                 tokenService.hash(code),
@@ -92,7 +101,15 @@ public class DeviceApplicationService {
      * 首台 Flutter 设备消费 bootstrap code。
      */
     @Transactional(noRollbackFor = BootstrapRejectedException.class)
-    public DeviceAuthResult consumeBootstrap(BootstrapConsumeCommand command) {
+    public CredentialResponseDeduplicator.CredentialIdempotentResult consumeBootstrap(
+            String idempotencyKey,
+            BootstrapConsumeCommand command
+    ) {
+        return credentialResponseDeduplicator.execute(idempotencyKey, "DEVICE_BOOTSTRAP_CONSUME",
+                Map.of(), command, () -> consumeBootstrapOnce(command));
+    }
+
+    private DeviceAuthResult consumeBootstrapOnce(BootstrapConsumeCommand command) {
         Instant now = Instant.now(clock);
         if (repository.findCurrentUser().isPresent()) {
             rejectBootstrap(null, "ALREADY_INITIALIZED");
@@ -161,21 +178,28 @@ public class DeviceApplicationService {
         Instant now = Instant.now(clock);
         String code = tokenService.generateCode(pairingCodeLength);
         UUID sessionId = UUID.randomUUID();
-        String qrPayload = "reboot-health://pair?sessionId=" + sessionId + "&code=" + code;
         PairingSession session = PairingSession.create(principal.userId(), principal.deviceId(),
-                tokenService.hash(code), qrPayload, now.plus(Duration.ofMinutes(pairingCodeTtlMinutes)), now);
+                tokenService.hash(code), now.plus(Duration.ofMinutes(pairingCodeTtlMinutes)), now);
         session = new PairingSession(sessionId, session.getUserId(), session.getCreatedByDeviceId(),
-                session.getCodeHash(), session.getQrPayload(), session.getStatus(), session.getExpiresAt(),
+                session.getCodeHash(), session.getStatus(), session.getExpiresAt(),
                 session.getConsumedAt(), session.getCancelledAt(), session.getCreatedDeviceId(),
                 session.getCreatedAt(), session.getUpdatedAt());
         repository.insertPairingSession(session);
         auditLogAppender.append("PAIRING_SESSION_CREATED", SECURITY_EVENT, session.getId(), null,
                 Map.of("createdByDeviceId", principal.deviceId(), "expiresAt", session.getExpiresAt()));
-        return new PairingSessionView(session.getId(), code, session.getQrPayload(), session.getExpiresAt());
+        return new PairingSessionView(session.getId(), code, qrPayload(session.getId(), code), session.getExpiresAt());
     }
 
     @Transactional
-    public DeviceAuthResult consumePairing(PairingConsumeCommand command) {
+    public CredentialResponseDeduplicator.CredentialIdempotentResult consumePairing(
+            String idempotencyKey,
+            PairingConsumeCommand command
+    ) {
+        return credentialResponseDeduplicator.execute(idempotencyKey, "DEVICE_PAIR_CONSUME",
+                Map.of(), command, () -> consumePairingOnce(command));
+    }
+
+    private DeviceAuthResult consumePairingOnce(PairingConsumeCommand command) {
         Instant now = Instant.now(clock);
         String codeHash = tokenService.hash(command.pairingCode());
         PairingSession session = repository.findPairingByHashForUpdate(codeHash)
@@ -207,7 +231,7 @@ public class DeviceApplicationService {
     @Transactional(readOnly = true)
     public List<DeviceView> listDevices(DevicePrincipal principal) {
         return repository.findDevices(principal.userId()).stream()
-                .map(DeviceView::from)
+                .map(device -> DeviceView.from(device, principal.deviceId()))
                 .toList();
     }
 
@@ -217,6 +241,14 @@ public class DeviceApplicationService {
                 .orElseThrow(() -> new ApplicationException(ErrorCode.DEVICE_NOT_FOUND, "设备不存在", HttpStatus.NOT_FOUND));
         if (!target.getUserId().equals(principal.userId())) {
             throw new ApplicationException(ErrorCode.DEVICE_NOT_FOUND, "设备不存在", HttpStatus.NOT_FOUND);
+        }
+        if (repository.countActiveDevices(principal.userId()) <= 1) {
+            throw new ApplicationException(ErrorCode.LAST_ACTIVE_DEVICE_CANNOT_BE_REVOKED,
+                    "不能撤销最后一台活跃可信设备", HttpStatus.CONFLICT);
+        }
+        if (target.isPrimary()) {
+            throw new ApplicationException(ErrorCode.PRIMARY_DEVICE_TRANSFER_REQUIRED,
+                    "主设备需要先转移后才能撤销", HttpStatus.CONFLICT);
         }
         Instant now = Instant.now(clock);
         target.revoke(now);
@@ -230,7 +262,35 @@ public class DeviceApplicationService {
     }
 
     @Transactional
-    public DeviceAuthResult refreshCredential(RefreshCredentialCommand command) {
+    public void makePrimary(DevicePrincipal principal, UUID targetDeviceId) {
+        Device current = repository.findPrimaryDeviceForUpdate(principal.userId())
+                .orElseThrow(() -> new ApplicationException(ErrorCode.DEVICE_NOT_FOUND, "主设备不存在", HttpStatus.NOT_FOUND));
+        Device target = repository.findDeviceByIdForUpdate(targetDeviceId)
+                .orElseThrow(() -> new ApplicationException(ErrorCode.DEVICE_NOT_FOUND, "设备不存在", HttpStatus.NOT_FOUND));
+        if (!target.getUserId().equals(principal.userId())) {
+            throw new ApplicationException(ErrorCode.DEVICE_NOT_FOUND, "设备不存在", HttpStatus.NOT_FOUND);
+        }
+        Instant now = Instant.now(clock);
+        if (!current.getId().equals(target.getId())) {
+            current.makeTrusted(now);
+            target.makePrimary(now);
+            repository.updateDevice(current);
+            repository.updateDevice(target);
+        }
+        auditLogAppender.append("PRIMARY_DEVICE_TRANSFERRED", SECURITY_EVENT, targetDeviceId, null,
+                Map.of("previousPrimaryDeviceId", current.getId(), "newPrimaryDeviceId", targetDeviceId));
+    }
+
+    @Transactional
+    public CredentialResponseDeduplicator.CredentialIdempotentResult refreshCredential(
+            String idempotencyKey,
+            RefreshCredentialCommand command
+    ) {
+        return credentialResponseDeduplicator.execute(idempotencyKey, "DEVICE_TOKEN_REFRESH",
+                Map.of(), command, () -> refreshCredentialOnce(command));
+    }
+
+    private DeviceAuthResult refreshCredentialOnce(RefreshCredentialCommand command) {
         Instant now = Instant.now(clock);
         String refreshHash = tokenService.hash(command.refreshToken());
         DeviceCredential credential = repository.findCredentialByRefreshHashForUpdate(refreshHash)
@@ -251,6 +311,10 @@ public class DeviceApplicationService {
         auditLogAppender.append("DEVICE_CREDENTIAL_ROTATED", SECURITY_EVENT, credential.getId(), null,
                 Map.of("deviceId", device.getId()));
         return new DeviceAuthResult(device.getUserId(), device.getId(), tokenPair.issuedCredentials());
+    }
+
+    private String qrPayload(UUID sessionId, String code) {
+        return "reboot-health://pair?sessionId=" + sessionId + "&code=" + code;
     }
 
     private void rejectBootstrap(UUID entityId, String reason) {
@@ -298,10 +362,12 @@ public class DeviceApplicationService {
     }
 
     public record DeviceView(UUID id, String deviceName, DevicePlatform platform, String status,
+                             boolean currentDevice,
                              String trustLevel, Instant createdAt, Instant lastSeenAt, Instant revokedAt) {
-        public static DeviceView from(Device device) {
+        public static DeviceView from(Device device, UUID currentDeviceId) {
             return new DeviceView(device.getId(), device.getDeviceName(), device.getPlatform(),
-                    device.getStatus().name(), device.getTrustLevel().name(), device.getCreatedAt(),
+                    device.getStatus().name(), device.getId().equals(currentDeviceId),
+                    device.getTrustLevel().name(), device.getCreatedAt(),
                     device.getLastSeenAt(), device.getRevokedAt());
         }
     }

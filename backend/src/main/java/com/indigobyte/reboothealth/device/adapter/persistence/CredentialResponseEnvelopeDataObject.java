@@ -9,23 +9,21 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * pairing_session 表持久化对象。
+ * credential_response_envelope 表持久化对象。
  */
 @Getter
 @Setter
-@TableName("pairing_session")
-public class PairingSessionDataObject {
+@TableName("credential_response_envelope")
+public class CredentialResponseEnvelopeDataObject {
 
     @TableId(type = IdType.INPUT)
     private UUID id;
-    private UUID userId;
-    private UUID createdByDeviceId;
-    private String codeHash;
-    private String status;
+    private String operationType;
+    private String idempotencyKey;
+    private String requestHash;
+    private String encryptedResponse;
+    private String nonce;
+    private String encryptionKeyVersion;
     private Instant expiresAt;
-    private Instant consumedAt;
-    private Instant cancelledAt;
-    private UUID createdDeviceId;
     private Instant createdAt;
-    private Instant updatedAt;
 }

@@ -14,7 +14,6 @@ public class PairingSession {
     private final UUID userId;
     private final UUID createdByDeviceId;
     private final String codeHash;
-    private final String qrPayload;
     private PairingStatus status;
     private final Instant expiresAt;
     private Instant consumedAt;
@@ -23,14 +22,13 @@ public class PairingSession {
     private final Instant createdAt;
     private Instant updatedAt;
 
-    public PairingSession(UUID id, UUID userId, UUID createdByDeviceId, String codeHash, String qrPayload,
+    public PairingSession(UUID id, UUID userId, UUID createdByDeviceId, String codeHash,
                           PairingStatus status, Instant expiresAt, Instant consumedAt, Instant cancelledAt,
                           UUID createdDeviceId, Instant createdAt, Instant updatedAt) {
         this.id = id;
         this.userId = userId;
         this.createdByDeviceId = createdByDeviceId;
         this.codeHash = codeHash;
-        this.qrPayload = qrPayload;
         this.status = status;
         this.expiresAt = expiresAt;
         this.consumedAt = consumedAt;
@@ -41,8 +39,8 @@ public class PairingSession {
     }
 
     public static PairingSession create(UUID userId, UUID createdByDeviceId, String codeHash,
-                                        String qrPayload, Instant expiresAt, Instant now) {
-        return new PairingSession(UUID.randomUUID(), userId, createdByDeviceId, codeHash, qrPayload,
+                                        Instant expiresAt, Instant now) {
+        return new PairingSession(UUID.randomUUID(), userId, createdByDeviceId, codeHash,
                 PairingStatus.CREATED, expiresAt, null, null, null, now, now);
     }
 
@@ -76,10 +74,6 @@ public class PairingSession {
 
     public String getCodeHash() {
         return codeHash;
-    }
-
-    public String getQrPayload() {
-        return qrPayload;
     }
 
     public PairingStatus getStatus() {

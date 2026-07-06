@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/design_tokens.dart';
+import '../../core/idempotent_action.dart';
 import '../auth/device_auth_api.dart';
 import '../auth/secure_credential_store.dart';
 
@@ -25,6 +26,15 @@ class _MyPageState extends State<MyPage> {
   String? _message;
   PairingSessionView? _pairingSession;
   List<DeviceView> _devices = const <DeviceView>[];
+  late final IdempotentAction _bootstrapAction;
+  late final IdempotentAction _pairAction;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrapAction = IdempotentAction(widget.authApi.createIdempotencyKey);
+    _pairAction = IdempotentAction(widget.authApi.createIdempotencyKey);
+  }
 
   @override
   void dispose() {
@@ -35,10 +45,12 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _consumeBootstrap() async {
     await _run(() async {
-      await widget.authApi.consumeBootstrap(
-        bootstrapCode: _bootstrapCodeController.text.trim(),
-        deviceName: 'Flutter 设备',
-        platform: _platformName(),
+      await _bootstrapAction.run((String key) => widget.authApi.consumeBootstrap(
+            bootstrapCode: _bootstrapCodeController.text.trim(),
+            deviceName: 'Flutter 设备',
+            platform: _platformName(),
+            idempotencyKey: key,
+          )
       );
       _bootstrapCodeController.clear();
       _message = '首台设备初始化完成';
@@ -55,10 +67,12 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _consumePairing() async {
     await _run(() async {
-      await widget.authApi.consumePairing(
-        pairingCode: _pairingCodeController.text.trim(),
-        deviceName: 'Flutter 设备',
-        platform: _platformName(),
+      await _pairAction.run((String key) => widget.authApi.consumePairing(
+            pairingCode: _pairingCodeController.text.trim(),
+            deviceName: 'Flutter 设备',
+            platform: _platformName(),
+            idempotencyKey: key,
+          )
       );
       _pairingCodeController.clear();
       _message = '设备配对完成';
@@ -68,6 +82,22 @@ class _MyPageState extends State<MyPage> {
 
   Future<void> _refreshDevices() async {
     _devices = await widget.authApi.listDevices();
+  }
+
+  Future<void> _revokeDevice(DeviceView device) async {
+    await _run(() async {
+      await widget.authApi.revokeDevice(device.id);
+      await _refreshDevices();
+      _message = '设备已撤销';
+    });
+  }
+
+  Future<void> _makePrimary(DeviceView device) async {
+    await _run(() async {
+      await widget.authApi.makePrimary(device.id);
+      await _refreshDevices();
+      _message = '主设备已更新';
+    });
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -172,7 +202,22 @@ class _MyPageState extends State<MyPage> {
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   title: Text(device.deviceName),
-                  subtitle: Text('${device.platform} · ${device.trustLevel} · ${device.status}'),
+                  subtitle: Text(_deviceSubtitle(device)),
+                  trailing: Wrap(
+                    spacing: AppSpacing.xs,
+                    children: <Widget>[
+                      if (device.status == 'ACTIVE' && device.trustLevel != 'TRUSTED_PRIMARY')
+                        TextButton(
+                          onPressed: _loading ? null : () => _makePrimary(device),
+                          child: const Text('设为主设备'),
+                        ),
+                      if (device.status == 'ACTIVE')
+                        TextButton(
+                          onPressed: _loading ? null : () => _revokeDevice(device),
+                          child: Text(device.currentDevice ? '撤销当前' : '撤销'),
+                        ),
+                    ],
+                  ),
                 ),
             ],
           ),
@@ -204,5 +249,12 @@ class _MyPageState extends State<MyPage> {
         ),
       ),
     );
+  }
+
+  String _deviceSubtitle(DeviceView device) {
+    final String current = device.currentDevice ? '当前设备 · ' : '';
+    final String primary = device.trustLevel == 'TRUSTED_PRIMARY' ? '主设备' : '可信设备';
+    final String status = device.status == 'ACTIVE' ? '可用' : '已撤销';
+    return '$current${device.platform} · $primary · $status';
   }
 }

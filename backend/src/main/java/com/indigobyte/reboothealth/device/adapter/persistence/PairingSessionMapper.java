@@ -15,7 +15,7 @@ public interface PairingSessionMapper extends BaseMapper<PairingSessionDataObjec
      * 按摘要锁定配对会话，用于一次性消费。
      */
     @Select("""
-            SELECT id, user_id, created_by_device_id, code_hash, qr_payload, status,
+            SELECT id, user_id, created_by_device_id, code_hash, status,
                    expires_at, consumed_at, cancelled_at, created_device_id,
                    created_at, updated_at
             FROM pairing_session

@@ -17,7 +17,7 @@ public class Device {
     private final String deviceName;
     private final DevicePlatform platform;
     private DeviceStatus status;
-    private final DeviceTrustLevel trustLevel;
+    private DeviceTrustLevel trustLevel;
     private final Instant createdAt;
     private Instant lastSeenAt;
     private Instant revokedAt;
@@ -59,6 +59,32 @@ public class Device {
         this.status = DeviceStatus.REVOKED;
         this.revokedAt = now;
         this.updatedAt = now;
+    }
+
+    /**
+     * 将设备提升为当前用户的主可信设备。
+     */
+    public void makePrimary(Instant now) {
+        ensureActive();
+        this.trustLevel = DeviceTrustLevel.TRUSTED_PRIMARY;
+        this.updatedAt = now;
+    }
+
+    /**
+     * 将原主设备降级为普通可信设备，用于显式主设备转移。
+     */
+    public void makeTrusted(Instant now) {
+        ensureActive();
+        this.trustLevel = DeviceTrustLevel.TRUSTED;
+        this.updatedAt = now;
+    }
+
+    public boolean isActive() {
+        return status == DeviceStatus.ACTIVE;
+    }
+
+    public boolean isPrimary() {
+        return trustLevel == DeviceTrustLevel.TRUSTED_PRIMARY;
     }
 
     public void ensureActive() {

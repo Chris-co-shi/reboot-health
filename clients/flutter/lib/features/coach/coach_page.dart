@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api_client.dart';
 import '../../core/design_tokens.dart';
+import '../../core/idempotent_action.dart';
 import '../auth/secure_credential_store.dart';
 import 'agent_api.dart';
 import 'agent_run_models.dart';
@@ -31,6 +32,13 @@ class _CoachPageState extends State<CoachPage> {
   String? _message;
   String? _debugRunId;
   Timer? _poller;
+  late final IdempotentAction _coachCheckAction;
+
+  @override
+  void initState() {
+    super.initState();
+    _coachCheckAction = IdempotentAction(widget.apiClient.createIdempotencyKey);
+  }
 
   @override
   void dispose() {
@@ -56,8 +64,8 @@ class _CoachPageState extends State<CoachPage> {
       _debugRunId = null;
     });
     try {
-      final AgentRun created = await widget.agentApi.createSmokeTestRun(
-        idempotencyKey: widget.apiClient.createIdempotencyKey(),
+      final AgentRun created = await _coachCheckAction.run(
+        (String key) => widget.agentApi.createSmokeTestRun(idempotencyKey: key),
       );
       if (!mounted) {
         return;

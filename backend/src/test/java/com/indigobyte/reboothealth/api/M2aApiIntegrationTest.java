@@ -29,7 +29,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 @Testcontainers
 @AutoConfigureMockMvc
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "app.device.auth.enabled=false")
 class M2aApiIntegrationTest {
 
     @Container

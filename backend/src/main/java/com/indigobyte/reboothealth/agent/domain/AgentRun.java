@@ -82,6 +82,14 @@ public class AgentRun {
         this.updatedAt = now;
     }
 
+    public void markExpired(String failureMessage, Instant now) {
+        this.status = AgentRunStatus.EXPIRED;
+        this.failureCode = AgentRunStatus.EXPIRED.name();
+        this.failureMessage = failureMessage;
+        this.completedAt = now;
+        this.updatedAt = now;
+    }
+
     public UUID getId() {
         return id;
     }

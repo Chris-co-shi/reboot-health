@@ -3,6 +3,7 @@ package com.indigobyte.reboothealth.device.adapter.persistence;
 import com.indigobyte.reboothealth.device.domain.AppUser;
 import com.indigobyte.reboothealth.device.domain.BootstrapSession;
 import com.indigobyte.reboothealth.device.domain.BootstrapStatus;
+import com.indigobyte.reboothealth.device.domain.CredentialResponseEnvelope;
 import com.indigobyte.reboothealth.device.domain.Device;
 import com.indigobyte.reboothealth.device.domain.DeviceCredential;
 import com.indigobyte.reboothealth.device.domain.DevicePlatform;
@@ -119,7 +120,7 @@ public final class DevicePersistenceConverter {
             return null;
         }
         return new PairingSession(dataObject.getId(), dataObject.getUserId(),
-                dataObject.getCreatedByDeviceId(), dataObject.getCodeHash(), dataObject.getQrPayload(),
+                dataObject.getCreatedByDeviceId(), dataObject.getCodeHash(),
                 PairingStatus.valueOf(dataObject.getStatus()), dataObject.getExpiresAt(),
                 dataObject.getConsumedAt(), dataObject.getCancelledAt(), dataObject.getCreatedDeviceId(),
                 dataObject.getCreatedAt(), dataObject.getUpdatedAt());
@@ -131,7 +132,6 @@ public final class DevicePersistenceConverter {
         dataObject.setUserId(session.getUserId());
         dataObject.setCreatedByDeviceId(session.getCreatedByDeviceId());
         dataObject.setCodeHash(session.getCodeHash());
-        dataObject.setQrPayload(session.getQrPayload());
         dataObject.setStatus(session.getStatus().name());
         dataObject.setExpiresAt(session.getExpiresAt());
         dataObject.setConsumedAt(session.getConsumedAt());
@@ -139,6 +139,30 @@ public final class DevicePersistenceConverter {
         dataObject.setCreatedDeviceId(session.getCreatedDeviceId());
         dataObject.setCreatedAt(session.getCreatedAt());
         dataObject.setUpdatedAt(session.getUpdatedAt());
+        return dataObject;
+    }
+
+    public static CredentialResponseEnvelope toDomain(CredentialResponseEnvelopeDataObject dataObject) {
+        if (dataObject == null) {
+            return null;
+        }
+        return new CredentialResponseEnvelope(dataObject.getId(), dataObject.getOperationType(),
+                dataObject.getIdempotencyKey(), dataObject.getRequestHash(), dataObject.getEncryptedResponse(),
+                dataObject.getNonce(), dataObject.getEncryptionKeyVersion(), dataObject.getExpiresAt(),
+                dataObject.getCreatedAt());
+    }
+
+    public static CredentialResponseEnvelopeDataObject toDataObject(CredentialResponseEnvelope envelope) {
+        CredentialResponseEnvelopeDataObject dataObject = new CredentialResponseEnvelopeDataObject();
+        dataObject.setId(envelope.getId());
+        dataObject.setOperationType(envelope.getOperationType());
+        dataObject.setIdempotencyKey(envelope.getIdempotencyKey());
+        dataObject.setRequestHash(envelope.getRequestHash());
+        dataObject.setEncryptedResponse(envelope.getEncryptedResponse());
+        dataObject.setNonce(envelope.getNonce());
+        dataObject.setEncryptionKeyVersion(envelope.getEncryptionKeyVersion());
+        dataObject.setExpiresAt(envelope.getExpiresAt());
+        dataObject.setCreatedAt(envelope.getCreatedAt());
         return dataObject;
     }
 }

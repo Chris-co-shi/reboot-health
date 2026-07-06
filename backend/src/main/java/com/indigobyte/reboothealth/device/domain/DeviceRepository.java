@@ -33,6 +33,10 @@ public interface DeviceRepository {
 
     List<Device> findDevices(UUID userId);
 
+    Optional<Device> findPrimaryDeviceForUpdate(UUID userId);
+
+    int countActiveDevices(UUID userId);
+
     void insertCredential(DeviceCredential credential);
 
     boolean updateCredential(DeviceCredential credential);
@@ -42,6 +46,10 @@ public interface DeviceRepository {
     Optional<DeviceCredential> findCredentialByRefreshHashForUpdate(String refreshTokenHash);
 
     Optional<DeviceCredential> findCredentialByDeviceIdForUpdate(UUID deviceId);
+
+    void insertCredentialResponseEnvelope(CredentialResponseEnvelope envelope);
+
+    Optional<CredentialResponseEnvelope> findCredentialResponseEnvelopeByKey(String idempotencyKey);
 
     void insertPairingSession(PairingSession session);
 
