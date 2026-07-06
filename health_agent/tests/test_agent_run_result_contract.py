@@ -103,6 +103,7 @@ class AgentRunResultContractTest(unittest.TestCase):
         self.assertTrue(result["requiresUserConfirmation"])
         self.assertIn("weeklyPlanDraft", result)
         self.assertNotIn("runId", result)
+        self.assertNotIn("warnings", result)
 
 
 if __name__ == "__main__":

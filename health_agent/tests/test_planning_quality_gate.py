@@ -132,6 +132,73 @@ class PlanningQualityGateTest(unittest.TestCase):
             any(step["name"] == "quality_gate_checked" for step in result.trace.steps)
         )
 
+    def test_agent_run_result_contains_quality_warnings(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(
+                _planning_output(
+                    weekly_plan={
+                        "status": "draft_requires_confirmation",
+                        "focus": "首周适应与恢复，但安排 HIIT 和高强度间歇。",
+                        "downgradePlan": "如喘不过气、头晕或胸闷则停止并降级。",
+                    }
+                )
+            )
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            {"userText": "体能差，篮球两个回合就喘。"},
+        )
+
+        payload = result.to_dict()
+        self.assertIn("warnings", payload)
+        self.assertIn(
+            "quality:warning:hiit_for_low_fitness",
+            "\n".join(payload["warnings"]),
+        )
+        self.assertIn(
+            "quality:warning:hiit_for_low_fitness",
+            "\n".join(payload["trace"]["warnings"]),
+        )
+
+    def test_agent_loop_adds_quality_warning_for_aggressive_plan(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(
+                _planning_output(
+                    weekly_plan={
+                        "status": "draft_requires_confirmation",
+                        "focus": "首周适应与恢复，但安排连续游 1000 米和高强度游泳。",
+                        "downgradePlan": "如呛水、头晕或胸闷则停止并降级。",
+                    }
+                )
+            )
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            {"userText": "游泳 25 米都会呛水，想快速提高。"},
+        )
+
+        self.assertIn(
+            "quality:warning:aggressive_swimming_for_choking_risk",
+            "\n".join(result.warnings),
+        )
+        quality_steps = [
+            step for step in result.trace.steps if step["name"] == "quality_gate_checked"
+        ]
+        self.assertEqual(quality_steps[-1]["qualityWarningCount"], 1)
+
+    def test_agent_loop_keeps_conservative_plan_warning_free(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(_planning_output())
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            {"userText": "想低强度恢复训练。"},
+        )
+
+        self.assertEqual(result.warnings, ())
+        quality_steps = [
+            step for step in result.trace.steps if step["name"] == "quality_gate_checked"
+        ]
+        self.assertEqual(quality_steps[-1]["qualityWarningCount"], 0)
+        self.assertEqual(quality_steps[-1]["qualityErrorCount"], 0)
+
     def test_smoke_summary_contains_quality_warning_count(self) -> None:
         summary = _redacted_summary(
             {
@@ -153,6 +220,28 @@ class PlanningQualityGateTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["warningCount"], 2)
+        self.assertEqual(summary["qualityWarningCount"], 1)
+
+    def test_smoke_summary_includes_quality_warning_count(self) -> None:
+        summary = _redacted_summary(
+            {
+                "schemaVersion": "health-agent.run.v0",
+                "runId": "run-test",
+                "sessionId": "session-test",
+                "status": "waiting_confirmation",
+                "selectedSkill": "INITIAL_PLANNING",
+                "finalOutcome": "waiting_confirmation",
+                "trace": {"provider": "mock"},
+                "output": _planning_output(),
+                "memoryCandidates": [],
+                "warnings": [
+                    "quality:warning:aggressive_swimming_for_choking_risk:存在游泳风险。",
+                ],
+                "error": None,
+            }
+        )
+
+        self.assertEqual(summary["warningCount"], 1)
         self.assertEqual(summary["qualityWarningCount"], 1)
 
 
