@@ -91,7 +91,7 @@ M2A-FIX 验收要求：
 
 ### M2B 计划、计划版本和人工确认
 
-状态：CODE_ACCEPTED
+状态：DONE
 
 范围：
 
