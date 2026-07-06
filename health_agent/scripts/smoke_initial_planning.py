@@ -91,6 +91,7 @@ def _redacted_summary(result: dict) -> dict:
     """输出不包含 API key 和完整健康原文的 AgentRunResult 摘要。"""
     output = result.get("output") or {}
     trace = result.get("trace") or {}
+    warnings = result.get("warnings") or []
     return {
         "schemaVersion": result.get("schemaVersion"),
         "runId": result.get("runId"),
@@ -105,9 +106,21 @@ def _redacted_summary(result: dict) -> dict:
         "hasWeeklyPlanDraft": isinstance(output.get("weeklyPlanDraft"), dict),
         "hasTodayActionDraft": isinstance(output.get("todayActionDraft"), dict),
         "memoryCandidateCount": len(result.get("memoryCandidates") or []),
-        "warningCount": len(result.get("warnings") or []),
+        "warningCount": len(warnings),
+        "qualityWarningCount": _quality_warning_count(warnings),
         "error": _redacted_error(result.get("error")),
     }
+
+
+def _quality_warning_count(warnings: object) -> int:
+    """统计质量门禁 warning/error 数量，不输出具体健康内容。"""
+    if not isinstance(warnings, list):
+        return 0
+    return sum(
+        1
+        for warning in warnings
+        if isinstance(warning, str) and warning.startswith("quality:")
+    )
 
 
 def _redacted_error(error: object) -> object:

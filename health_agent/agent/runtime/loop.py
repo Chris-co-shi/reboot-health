@@ -19,6 +19,7 @@ from agent.runtime.result import AgentRunError, AgentRunResult
 from agent.runtime.session import AgentSession, InMemorySessionStore
 from agent.runtime.state import RunStatus
 from agent.runtime.trace import RunTrace, TraceRecorder
+from agent.safety.planning_quality import PlanningQualityGate
 from agent.schemas.agent import (
     AGENT_RUN_STATUS_COMPLETED,
     AGENT_RUN_STATUS_ERROR,
@@ -67,6 +68,7 @@ class AgentLoop:
         session_store: InMemorySessionStore | None = None,
         trace_recorder: TraceRecorder | None = None,
         memory_candidate_builder: MemoryCandidateBuilder | None = None,
+        planning_quality_gate: PlanningQualityGate | None = None,
         limits: LoopLimits | None = None,
     ) -> None:
         self.skill_registry = skill_registry or SkillRegistry()
@@ -78,6 +80,7 @@ class AgentLoop:
         self.memory_candidate_builder = (
             memory_candidate_builder or MemoryCandidateBuilder()
         )
+        self.planning_quality_gate = planning_quality_gate or PlanningQualityGate()
         self.limits = limits or LoopLimits()
         self.last_session: AgentSession | None = None
         self.last_trace: RunTrace | None = None
@@ -170,6 +173,22 @@ class AgentLoop:
                 {"selectedSkill": trigger, "step": session.turns},
             )
             output = skill.run(context.skill_payload)
+            if trigger == "INITIAL_PLANNING":
+                quality_result = self.planning_quality_gate.evaluate(
+                    context.skill_payload,
+                    output,
+                )
+                trace.warnings.extend(quality_result.warnings)
+                self.trace_recorder.record_step(
+                    trace,
+                    "quality_gate_checked",
+                    {
+                        "qualityWarningCount": quality_result.count_by_severity(
+                            "warning"
+                        ),
+                        "qualityErrorCount": quality_result.count_by_severity("error"),
+                    },
+                )
             self.last_memory_candidates = tuple(
                 self.memory_candidate_builder.from_planning_output(output)
                 if trigger == "INITIAL_PLANNING"

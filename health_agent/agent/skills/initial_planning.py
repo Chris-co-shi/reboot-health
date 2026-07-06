@@ -12,28 +12,13 @@ from typing import Any, Mapping
 
 from agent.models.base import BaseModelProvider
 from agent.models.mock import MockProvider
+from agent.safety.rules import FORBIDDEN_BUSINESS_FACT_CLAIMS
 from agent.schemas.planning import (
     PLANNING_SCHEMA_VERSION,
     PlanningInput,
     PlanningOutput,
     SchemaValidationError,
     validate_planning_output,
-)
-
-
-FORBIDDEN_BUSINESS_FACT_CLAIMS = (
-    "已保存",
-    "保存成功",
-    "已发布",
-    "发布成功",
-    "已确认",
-    "确认成功",
-    "已生效",
-    "已经生效",
-    "已写入",
-    "写入数据库",
-    "已更新业务事实",
-    "已修改业务事实",
 )
 
 
