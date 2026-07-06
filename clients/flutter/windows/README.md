@@ -1,9 +1,22 @@
+<div align="center">
+
 # Windows Runner
 
-M2.5-A 预留 Windows 平台目录。当前 macOS 环境通常不能直接构建 Windows 桌面产物，且当前环境缺少 Flutter CLI，未生成完整 native runner。
+<img alt="Status" src="https://img.shields.io/badge/Status-Not%20Generated-D63031">
+<img alt="Platform" src="https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white">
 
-在 Windows 开发机安装 Flutter SDK 后在 `clients/flutter` 执行：
+</div>
 
-```bash
+> 当前目录只是 M2.5-A 的平台占位，**不包含可构建的 Windows native runner**。
+
+## Generate
+
+在 Windows 开发机安装 Flutter SDK 与 Visual Studio Desktop C++ workload 后，从 `clients/flutter` 执行：
+
+```powershell
 flutter create --platforms=windows .
+flutter doctor -v
+flutter build windows --debug
 ```
+
+macOS 环境不能替代真实 Windows 构建验收。完成后应删除本占位说明，并更新 [`../README.md`](../README.md)。
