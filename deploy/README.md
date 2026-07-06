@@ -2,7 +2,7 @@
 
 # Deployment
 
-### Local private deployment for reboot-health
+### reboot-health 私有部署入口
 
 <p>
   <img alt="Docker Compose" src="https://img.shields.io/badge/Docker%20Compose-Local%20Stack-2496ED?logo=docker&logoColor=white">
@@ -11,50 +11,50 @@
 
 </div>
 
-## Components
+## 📦 Components
 
-The deployment stack coordinates:
+当前部署栈负责协调：
 
-- Java Health Domain Kernel.
-- Python Health Agent Harness.
-- Frozen Vue Debug Tool.
-- External or local PostgreSQL 17, depending on environment configuration.
+- Java Health Domain Kernel。
+- Python Health Agent Harness。
+- 冻结的 Vue Debug Tool。
+- 按环境配置使用的 PostgreSQL 17。
 
-Flutter runs as the user client and is not hosted by this Compose stack.
+Flutter 是用户客户端，不由本 Compose 栈托管。
 
-## Validate configuration
+## ✅ Validate
 
-From the repository root:
+在仓库根目录执行：
 
 ```bash
 docker compose -f deploy/docker-compose.yml config
 ```
 
-## Start
+## ▶️ Start
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-## Inspect
+## 🔎 Inspect
 
 ```bash
 docker compose -f deploy/docker-compose.yml ps
 docker compose -f deploy/docker-compose.yml logs -f
 ```
 
-## Stop
+## ⏹️ Stop
 
 ```bash
 docker compose -f deploy/docker-compose.yml down
 ```
 
-## Configuration rules
+## 🛡️ Configuration rules
 
-- Real credentials and private network addresses must be provided through local environment configuration.
-- Do not commit production secrets or encryption material.
-- Do not expose services publicly by default.
-- M2.5-A does not require Redis, a message queue, a vector database or a workflow platform.
-- Deployment changes must not silently alter application business behavior.
+- 真实凭据和私有网络地址必须通过本地环境配置提供。
+- 不提交生产密钥或加密材料。
+- 默认不把服务暴露到公网。
+- M2.5-A 不需要 Redis、消息队列、向量数据库或工作流平台。
+- 部署改动不得静默改变应用业务行为。
 
-Detailed constraints are defined in [`AGENTS.md`](AGENTS.md) and [`../docs/architecture.md`](../docs/architecture.md).
+详细约束见 [`AGENTS.md`](AGENTS.md)和[`../docs/architecture.md`](../docs/architecture.md)。
