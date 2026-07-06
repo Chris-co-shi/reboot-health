@@ -1,2 +1,0 @@
-# M2.5-A intentionally uses Python 3.12 standard library only.
-# No external runtime dependencies are required for the mock Agent Runtime.

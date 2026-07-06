@@ -1,9 +1,0 @@
-[project]
-name = "reboot-health-agent-runtime"
-version = "0.1.0"
-description = "M2.5-A mock Agent Runtime for reboot-health."
-requires-python = ">=3.12"
-dependencies = []
-
-[tool.pytest.ini_options]
-pythonpath = ["."]

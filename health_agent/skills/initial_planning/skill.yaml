@@ -1,0 +1,14 @@
+id: initial_planning
+trigger: INITIAL_PLANNING
+version: health-agent.initial-planning.v0
+locale: zh-CN
+status: implemented
+provider_default: mock
+requires_user_confirmation: true
+description: >
+  Generate understanding candidates, health constraint candidates, goal
+  candidates, plan drafts, today action drafts, safety notes, and questions.
+boundaries:
+  - Python only generates candidates and drafts.
+  - Confirmed facts, safety rules, confirmation, and publication remain outside this skill.
+  - The skill must not claim facts are saved, confirmed, published, or effective.
