@@ -54,7 +54,7 @@ flowchart LR
 | [`clients/flutter/`](clients/flutter/README.md) | **Flutter Client** | 正式用户交互与多平台体验 |
 | [`frontend/`](frontend/README.md) | **Vue Debug Tool** | 冻结的内部数据检查工具 |
 | [`deploy/`](deploy/README.md) | Deployment | Docker Compose 与环境变量入口 |
-| `docs/` | Documentation | 产品、架构、领域、安全和决策记录 |
+| [`docs/`](docs/README.md) | Documentation | 产品、架构、领域、安全和决策记录 |
 
 ## 🧠 Harness roadmap
 
