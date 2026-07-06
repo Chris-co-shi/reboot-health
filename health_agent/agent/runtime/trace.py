@@ -49,7 +49,7 @@ class TraceRecorder:
         self,
         session_id: str,
         trigger_type: str,
-        provider: str = "mock",
+        provider: str = "unknown",
     ) -> RunTrace:
         """开始一条新的 RunTrace。"""
         trace = RunTrace(

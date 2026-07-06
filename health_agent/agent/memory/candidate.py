@@ -19,3 +19,13 @@ class MemoryCandidate:
     evidence: list[str] = field(default_factory=list)
     confidence: str = "low"
     requires_user_confirmation: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """返回可序列化候选结构。"""
+        return {
+            "kind": self.kind,
+            "content": self.content,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "requiresUserConfirmation": self.requires_user_confirmation,
+        }

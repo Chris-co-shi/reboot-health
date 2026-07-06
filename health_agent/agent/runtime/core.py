@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from agent.models.mock import MockProvider
 from agent.runtime.loop import AgentLoop
+from agent.runtime.result import AgentRunResult
 from agent.skills.initial_planning import InitialPlanningSkill
 from agent.skills.registry import SkillRegistry
 
@@ -55,6 +56,16 @@ class AgentCore:
         loop = AgentLoop(skill_registry=self.registry)
         self.last_loop = loop
         return loop.run(trigger_or_request, payload)
+
+    def run_detailed(
+        self,
+        trigger_or_request: str | Mapping[str, Any],
+        payload: Mapping[str, Any] | None = None,
+    ) -> AgentRunResult:
+        """执行一次触发请求，并返回稳定 AgentRunResult 合同。"""
+        loop = AgentLoop(skill_registry=self.registry)
+        self.last_loop = loop
+        return loop.run_detailed(trigger_or_request, payload)
 
     def _normalize_request(
         self,

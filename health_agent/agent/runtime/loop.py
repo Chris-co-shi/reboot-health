@@ -15,9 +15,21 @@ from agent.memory.manager import MemoryCandidateBuilder
 from agent.models.base import ProviderResponseError
 from agent.models.mock import MockProvider
 from agent.runtime.context import ContextBuilder
+from agent.runtime.result import AgentRunError, AgentRunResult
 from agent.runtime.session import AgentSession, InMemorySessionStore
 from agent.runtime.state import RunStatus
 from agent.runtime.trace import RunTrace, TraceRecorder
+from agent.schemas.agent import (
+    AGENT_RUN_STATUS_COMPLETED,
+    AGENT_RUN_STATUS_ERROR,
+    AGENT_RUN_STATUS_UNSUPPORTED,
+    AGENT_RUN_STATUS_WAITING_CONFIRMATION,
+    FINAL_OUTCOME_COMPLETED,
+    FINAL_OUTCOME_ERROR,
+    FINAL_OUTCOME_MAX_STEPS_EXCEEDED,
+    FINAL_OUTCOME_UNSUPPORTED,
+    FINAL_OUTCOME_WAITING_CONFIRMATION,
+)
 from agent.schemas.planning import SchemaValidationError
 from agent.skills.initial_planning import InitialPlanningSkill
 from agent.skills.registry import SkillRegistry
@@ -82,27 +94,59 @@ class AgentLoop:
         payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """运行一次 Agent 请求，并返回 Skill 兼容输出。"""
+        result = self.run_detailed(request, payload)
+        return dict(result.output or {})
+
+    def run_detailed(
+        self,
+        request: str | Mapping[str, Any],
+        payload: Mapping[str, Any] | None = None,
+    ) -> AgentRunResult:
+        """运行一次 Agent 请求，并返回稳定 AgentRunResult 合同。"""
         trigger, skill_payload, session_id = self._normalize_request(request, payload)
         session = self.session_store.get_or_create(session_id=session_id)
         self.last_session = session
+        self.last_memory_candidates = ()
         trace = self.trace_recorder.start(
             session_id=session.session_id,
             trigger_type=trigger or "UNKNOWN",
-            provider="mock",
+            provider=self._provider_name_for(trigger),
         )
         self.last_trace = trace
 
         if self.limits.max_steps <= 0:
             session.status = RunStatus.FAILED
             trace.warnings.append("max_steps_exceeded")
-            self.trace_recorder.finish(trace, "max_steps_exceeded")
-            return self._max_steps_exceeded(trigger)
+            self.trace_recorder.finish(trace, FINAL_OUTCOME_MAX_STEPS_EXCEEDED)
+            output = self._max_steps_exceeded(trigger)
+            return self._result(
+                session=session,
+                trace=trace,
+                status=AGENT_RUN_STATUS_ERROR,
+                final_outcome=FINAL_OUTCOME_MAX_STEPS_EXCEEDED,
+                output=output,
+                error=AgentRunError(
+                    code="MAX_STEPS_EXCEEDED",
+                    message=output["error"]["message"],
+                ),
+            )
 
         skill = self.skill_registry.get(trigger)
         if skill is None:
             session.status = RunStatus.FAILED
-            self.trace_recorder.finish(trace, "unsupported")
-            return self._unsupported(trigger)
+            self.trace_recorder.finish(trace, FINAL_OUTCOME_UNSUPPORTED)
+            output = self._unsupported(trigger)
+            return self._result(
+                session=session,
+                trace=trace,
+                status=AGENT_RUN_STATUS_UNSUPPORTED,
+                final_outcome=FINAL_OUTCOME_UNSUPPORTED,
+                output=output,
+                error=AgentRunError(
+                    code="UNSUPPORTED_TRIGGER",
+                    message=output["error"]["message"],
+                ),
+            )
 
         trace.selected_skill = trigger
         session.status = RunStatus.RUNNING
@@ -136,11 +180,33 @@ class AgentLoop:
             else:
                 session.status = RunStatus.COMPLETED
             self.trace_recorder.finish(trace, final_outcome)
-            return output
+            return self._result(
+                session=session,
+                trace=trace,
+                status=(
+                    AGENT_RUN_STATUS_WAITING_CONFIRMATION
+                    if final_outcome == FINAL_OUTCOME_WAITING_CONFIRMATION
+                    else AGENT_RUN_STATUS_COMPLETED
+                ),
+                final_outcome=final_outcome,
+                output=output,
+                memory_candidates=self.last_memory_candidates,
+            )
         except (ProviderResponseError, SchemaValidationError, ValueError) as exc:
             session.status = RunStatus.FAILED
-            self.trace_recorder.finish(trace, "error")
-            return self._skill_failed(trigger, exc)
+            self.trace_recorder.finish(trace, FINAL_OUTCOME_ERROR)
+            output = self._skill_failed(trigger, exc)
+            return self._result(
+                session=session,
+                trace=trace,
+                status=AGENT_RUN_STATUS_ERROR,
+                final_outcome=FINAL_OUTCOME_ERROR,
+                output=output,
+                error=AgentRunError(
+                    code="SKILL_FAILED",
+                    message=str(exc),
+                ),
+            )
 
     def _normalize_request(
         self,
@@ -173,8 +239,39 @@ class AgentLoop:
     def _final_outcome_for(self, output: Mapping[str, Any]) -> str:
         """根据输出边界判断最终状态。"""
         if output.get("requiresUserConfirmation") is True:
-            return "waiting_confirmation"
-        return "completed"
+            return FINAL_OUTCOME_WAITING_CONFIRMATION
+        return FINAL_OUTCOME_COMPLETED
+
+    def _provider_name_for(self, trigger: str) -> str:
+        """识别当前 Skill Provider；无法识别时返回 unknown。"""
+        skill = self.skill_registry.get(trigger)
+        provider = getattr(skill, "provider", None)
+        provider_name = getattr(provider, "provider_name", None)
+        return str(provider_name) if provider_name else "unknown"
+
+    def _result(
+        self,
+        session: AgentSession,
+        trace: RunTrace,
+        status: str,
+        final_outcome: str,
+        output: Mapping[str, Any],
+        memory_candidates: tuple[MemoryCandidate, ...] = (),
+        error: AgentRunError | None = None,
+    ) -> AgentRunResult:
+        """构造稳定 AgentRunResult。"""
+        return AgentRunResult(
+            run_id=trace.run_id,
+            session_id=session.session_id,
+            status=status,
+            selected_skill=trace.selected_skill,
+            final_outcome=final_outcome,
+            output=output,
+            memory_candidates=memory_candidates,
+            trace=trace,
+            warnings=tuple(trace.warnings),
+            error=error,
+        )
 
     def _unsupported(self, trigger: str) -> dict[str, Any]:
         """返回未知 trigger 的兼容错误结构。"""
