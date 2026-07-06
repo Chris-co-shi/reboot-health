@@ -21,13 +21,14 @@
 - 徽章只能表达稳定事实，例如语言版本、技术栈、模块定位；没有真实 CI 时禁止伪造 `build passing`、coverage 或 release 徽章。
 - 首屏必须回答：这是什么、解决什么问题、当前是否可用。
 - 优先使用短段落、表格、Mermaid、代码块和清晰状态提示，避免长篇连续文字。
-- 每个模块 README 建议包含：定位、职责边界、当前状态、运行或验证命令、相关文档。
+- 每个一级运行时或部署目录应有模块 README，包含定位、职责边界、当前状态、运行或验证命令、相关文档。
 - 使用一致术语：Python Health Agent Harness、Java Health Domain Kernel、Flutter Client、Vue Debug Tool。
 - 使用少量 emoji 帮助信息分区，但不得堆叠装饰符或影响专业感。
 - 命令必须可复制；未验证命令和平台必须明确标注。
 - 不重复完整架构、数据库字段、路线或 ADR 内容，使用链接指向权威文档。
 - 不使用会快速失效的截图、营销数字或未经验证的能力描述。
 - 平台占位 README 必须明显标记为 `BLOCKED` 或 `NOT GENERATED`，不得让读者误认为 runner 已存在。
+- 新增、删除或重命名一级模块 README 时，必须同步根 README 的模块入口表。
 
 ## 状态表达
 
