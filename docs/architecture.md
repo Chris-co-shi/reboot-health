@@ -1,46 +1,71 @@
 # 架构方案
 
-## 架构目标
+## 核心定位
 
-- 支持 AI-first 的个人健康与训练闭环。
-- 保持单用户私有部署简单。
-- 明确 Java、Python、Flutter 和 Vue 的职责。
-- 通过纵向切片交付，避免一次跨多个运行时扩展业务。
-- 关键状态、安全和确认可审计、可测试、可恢复。
+`reboot-health` 采用三层核心结构：
+
+```text
+Python Health Agent Harness
+    产品智能与任务编排核心
+
+Java Health Domain Kernel
+    已确认事实、安全规则和领域状态权威
+
+Flutter Client
+    正式用户交互与多平台体验
+```
+
+Python 决定下一步应该做什么；Java 决定什么允许做并可靠保存；Flutter 负责用户如何表达、确认和行动。
+
+Python 是智能控制流核心，但不是业务事实权威。Java 是可信领域内核，但不是 Agent 编排核心。
 
 ## 系统组件
 
 ```text
 Flutter Client
-    ↓ REST
-Java Backend
+    ↓ REST / SSE
+Java Edge + Health Domain Kernel
     ├── PostgreSQL 17
-    └── internal HTTP → Python Agent Runtime
+    ├── Agent Tool API
+    └── internal HTTP → Python Health Agent Harness
 
 Vue Debug Tool ── REST → Java Backend
 ```
 
+- Python：理解任务、选择 Skill、组装上下文、调用模型、请求 Tool、处理结果和生成候选。
+- Java：保存事实、执行规则、管理确认、设备身份、审计、幂等和 AgentRun 状态。
 - Flutter：唯一正式用户客户端。
-- Java：业务事实、安全、确认、状态、设备认证和 AgentRun 权威系统。
-- Python：模型 Provider、编排和结构化候选输出。
 - Vue：冻结的内部调试工具。
-- PostgreSQL：业务和运行状态持久化。
 
-## 部署拓扑
+## Python Health Agent Harness
 
-- 单用户私有部署。
-- Backend、Agent Runtime 和 Vue 调试工具使用 Docker Compose。
-- PostgreSQL 17 可运行在宿主机或受控环境。
-- 默认端口绑定本机地址；远程访问由用户自己的安全网络边界处理。
-- M2.5-A 不引入 Redis、消息队列、向量数据库或工作流平台。
+长期能力包括：
 
-详细环境变量和容器配置见 `deploy/`；当前交付状态见 `mvp-exec-plan.md`。
+- Agent Loop
+- Skill Registry
+- Tool Registry
+- Context Builder
+- Session Runtime
+- Memory Manager
+- Approval Coordinator
+- Model Router
+- Run Trace
+- Evaluation
+- Recovery
 
-## Java 后端
+约束：
+
+- 不访问 PostgreSQL。
+- 不直接写 Goal、HealthConstraint、Plan 或 PlanVersion。
+- 不直接发布计划或改变确认状态。
+- 不绕过 Java 权限、安全规则和领域不变量。
+- 不把全部能力堆进一个系统 Prompt。
+
+M2.5-A 仅提供稳定 Model Mock 和最小 Runtime API，完整 Harness 尚未实现。
+
+## Java Health Domain Kernel
 
 采用 Java 21、Spring Boot、模块化单体、Flyway、MyBatis-Plus 和 Testcontainers。
-
-依赖方向：
 
 ```text
 Controller -> Application Service -> Domain -> Repository Port
@@ -52,95 +77,107 @@ External Adapter -> Application Port
 
 - `profile`：用户档案和已确认健康约束。
 - `goal`：目标唯一事实来源。
-- `plan`：长期 Plan 和 7 天 PlanVersion 引擎。
-- `agent`：AgentRun 权威状态和 Python 调用边界。
+- `plan`：长期 Plan 和 7 天 PlanVersion 发布引擎。
+- `agent`：AgentRun 状态、Runtime 调用边界和结果校验。
 - `device`：设备初始化、配对、认证和撤销。
 - `audit`：追加写业务与安全审计。
 - `idempotency`：关键写请求的幂等边界。
+
+职责：
+
+- 保存已确认事实。
+- 提供面向业务意图的 Agent Tool。
+- 校验 Tool 权限、影响等级、确认策略和幂等边界。
+- 执行确定性规则和领域不变量。
+- 保存 AgentRun、ToolCall、确认和业务审计结果。
 
 约束：
 
 - 领域层不依赖 Web、Mapper、Python 或 Flutter。
 - 数据库事务中不调用 Python 或其他远程服务。
-- Java 不负责 Prompt 内容和客户端展示策略。
-- AI 候选必须经结构校验、安全检查和确认边界后才能影响业务事实。
-- 已确认计划由现有 PlanVersion 引擎发布，不为 AI 建立并行计划事实源。
+- Java 不负责 Skill 选择、Prompt 内容和模型控制流。
+- 已确认计划继续由现有 PlanVersion 引擎发布。
 
-## Python Agent Runtime
+## Agent Tool Contract
 
-Python Runtime 是无业务事实所有权的执行器：
+Java CRUD API 不直接等同于 Agent Tool。Tool 应面向业务意图，并声明：
 
-- 接收 Java 提交的最小上下文。
-- 调用 ModelProvider。
-- 返回版本化的结构化候选结果。
-- 标准化模型超时、无效输出和内部失败。
+- 名称和用途。
+- 输入输出 Schema。
+- 权限和影响等级。
+- 确认策略。
+- 幂等、超时和审计策略。
 
-禁止：
+Python 选择并请求 Tool；Java 最终决定是否允许执行。
 
-- 访问 PostgreSQL。
-- 直接写 Goal、HealthConstraint、Plan 或 PlanVersion。
-- 直接发布计划或更新业务确认状态。
-- 自行引入多 Agent 自治。
+## Agent 运行模型
 
-M2.5-A 使用稳定 Model Mock；真实模型路由属于后续阶段。
+区分：
 
-## AgentRun 调用链
+- Conversation：长期对话。
+- Session：连续交互上下文。
+- AgentRun：一次明确任务。
+- ToolCall：一次受控工具调用。
+- Confirmation：等待用户授权的状态。
+
+目标调用链：
 
 ```text
-Flutter 创建 AgentRun
-→ Java 短事务保存 CREATED 并返回 202
-→ 事务提交后受控执行器调用 Python
-→ Java 更新 RUNNING / VALIDATING
-→ Java 校验结果
-→ READY_FOR_USER_REVIEW 或 FAILED
-→ Flutter 轮询读取状态和卡片
+Flutter 发起目标
+→ Java 认证并创建 AgentRun
+→ Python 选择 Skill 并构建上下文
+→ Python 请求 Java Tool
+→ Java 校验并返回结果
+→ Python 继续有限轮次决策
+→ 输出候选或等待确认
+→ Java 保存权威状态
+→ Flutter 展示卡片和确认入口
 ```
 
-Java 是 AgentRun 状态唯一权威。Python 调用期间不得持有数据库事务。卡住的运行必须有超时和恢复策略。
+M2.5-A 当前仍是一次 Mock Runtime 执行，不代表完整 Agent Loop 已完成。
+
+## Memory 与 Approval
+
+Java 保存已确认事实、目标、健康约束、计划、执行事实和影响安全判断的信息。
+
+Python 管理会话摘要、非事实任务状态、行为模式候选、策略经验候选和上下文压缩结果。
+
+影响安全和计划的记忆候选必须经过 Java 保存边界和用户确认。
+
+查询、解释和草案生成可以自动执行；降低风险或复杂度的小调整可以按策略执行；新计划、增加训练负荷、重要目标和健康约束变化必须等待确认。
+
+## 可观测性与评测
+
+每次 Agent Episode 应关联 runId、trigger、selectedSkill、contextSummary、provider、promptVersion、toolCalls、policyDecisions、finalOutcome、latency、tokenUsage 和 failureCategory。
+
+评测覆盖正确性、安全性、Tool 选择、确认判断、成本和失败恢复。
 
 ## Flutter 客户端
 
 目标平台：iOS、Android、macOS、Windows。
 
-原则：
-
 - 移动端优先，桌面端做适配布局。
-- 只调用 Java API。
+- 只调用 Java 对外 API。
 - 自然语言负责表达和解释，卡片负责行动和确认。
 - 不向普通用户展示 UUID、revision、PlanVersion 或内部枚举。
-- 设备信息通过统一平台存储抽象管理。
-- 平台能力通过适配器隔离。
 
-M2.5-A 的 Flutter 真实 runner 和四端构建尚有环境阻塞，不能视为完整验收。
+M2.5-A 的真实 runner 和四端构建仍有环境阻塞。
 
 ## Vue 调试工具
 
-Vue 只用于已有 M2A/M2B 数据检查和阻塞性修复：
-
-- 不新增 Agent、Program、Phase、DailyAction 或 Observation 正式页面。
-- 不与 Flutter 双重实现新功能。
-- 不因调试目的绕过后端认证、状态机或审计。
+Vue 只用于已有数据检查和阻塞性修复，不新增正式业务页面，不与 Flutter 双重实现新功能。
 
 ## 设备认证边界
 
-第一阶段使用私有设备认证，不建设完整 IAM：
-
-- 首台设备由服务端 CLI 生成的一次性初始化码建立。
-- 后续设备由已授权设备创建配对会话。
-- 每台设备有独立身份和可撤销凭据。
-- 不得撤销最后一台活跃可信设备。
-- 主设备必须显式转移。
-- 除明确白名单外，`/api/v1/**` 默认要求设备身份。
+第一阶段使用私有设备认证，不建设完整 IAM。首台设备通过一次性初始化码建立，后续设备通过授权设备配对。每台设备独立、可撤销，主设备转移必须显式执行。
 
 精确 API、数据库表和错误码见 `api-db.md`；安全不变量见 `safety-rules.md`。
 
-## 文档和交付边界
+## 文档边界
 
-- 产品体验和范围：`product-scope.md`。
-- 业务模型：`domain-model.md`。
-- 技术合同：`api-db.md`。
-- 安全规则：`safety-rules.md`。
-- 当前状态和阻塞：`mvp-exec-plan.md`。
-- 重大决策：`decisions/`。
-
-架构文档不复制完整字段、SQL、API 请求体或里程碑验收清单。
+- 产品体验和范围：`product-scope.md`
+- 业务模型：`domain-model.md`
+- 技术合同：`api-db.md`
+- 安全规则：`safety-rules.md`
+- 当前状态：`mvp-exec-plan.md`
+- 重大决策：`decisions/`
