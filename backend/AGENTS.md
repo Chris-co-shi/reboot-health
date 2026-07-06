@@ -1,10 +1,14 @@
-# Java 后端 Agent 规则
+# Java Health Domain Kernel 规则
 
 ## 适用范围
 
 适用于 `backend/`。修改业务包时还必须读取对应模块的 `AGENTS.md`。
 
-后端职责：保存领域事实、执行确定性规则、管理事务、确认、审计、设备认证和 AgentRun 状态。后端不负责 Flutter 展示策略，也不负责 Python Prompt 编排。
+Java 后端是可信领域内核，不是产品智能编排核心。
+
+职责：保存已确认事实、执行确定性规则、管理事务、确认、审计、设备认证、幂等和 AgentRun 权威状态，并向 Python Health Agent Harness 提供受控 Tool Contract。
+
+不负责：Skill 选择、Prompt 编排、模型控制流、Memory 策略或 Flutter 展示策略。
 
 ## Java 21
 
@@ -32,6 +36,21 @@ External Adapter -> Application Port
 - 不使用 `IService`、`ServiceImpl` 侵入领域。
 - API Response 不直接返回 Persistence DO。
 - 跨业务模块优先通过明确 Application Port 或只读 Query，不直接调用对方 Mapper。
+
+## Agent Tool Contract
+
+普通 CRUD API 不自动等同于 Agent Tool。提供给 Python 的 Tool 必须面向业务意图，并声明：
+
+- 名称和用途。
+- 输入输出 Schema。
+- 权限和影响等级。
+- 确认策略。
+- 幂等策略。
+- 超时和审计策略。
+
+Java 必须在执行前校验设备身份、用户边界、参数、安全规则、确认状态和领域不变量。
+
+Python 可以请求 Tool，但不能决定业务写入已经生效。
 
 ## 事务、异步和外部调用
 
@@ -74,6 +93,7 @@ External Adapter -> Application Port
 - API：MockMvc 集成测试。
 - PostgreSQL、Flyway、约束和锁：Testcontainers。
 - 外部适配器：合同测试；不得用 Mock 测试冒充真实 Java-Python 合同验证。
+- Agent Tool 必须覆盖权限、确认、幂等和审计边界。
 - 不 Mock 领域对象本身，不删除失败测试换取构建通过。
 - 测试数据不得包含真实个人健康资料。
 
@@ -94,4 +114,4 @@ cd backend
 mvn test
 ```
 
-涉及迁移、锁、状态机、审计、认证或幂等时，必须有对应自动化测试。
+涉及迁移、锁、状态机、审计、认证、Tool 或幂等时，必须有对应自动化测试。
