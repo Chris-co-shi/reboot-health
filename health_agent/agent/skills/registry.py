@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Any, Mapping
 
 from agent.skills.base import Skill
 

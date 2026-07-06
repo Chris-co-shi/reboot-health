@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agent.models.base import ProviderResponseError
 from agent.models.mock import MockProvider
-from agent.schemas.planning import SchemaValidationError
+from agent.runtime.loop import AgentLoop
 from agent.skills.initial_planning import InitialPlanningSkill
 from agent.skills.registry import SkillRegistry
 
@@ -29,6 +28,7 @@ class AgentCore:
     def __init__(self, registry: SkillRegistry | None = None) -> None:
         """创建 Core，并允许测试或上层运行时注入自定义 SkillRegistry。"""
         self.registry = registry or SkillRegistry()
+        self.last_loop: AgentLoop | None = None
 
     @classmethod
     def default(cls, provider: Any | None = None) -> "AgentCore":
@@ -52,25 +52,9 @@ class AgentCore:
         trigger/type/intent 与 input/payload/data 的请求对象。异常被收敛成
         结构化错误，避免把 Provider 或 Schema 细节泄漏给调用方。
         """
-        trigger, skill_payload = self._normalize_request(trigger_or_request, payload)
-        skill = self.registry.get(trigger)
-        if skill is None:
-            return self._unsupported(trigger)
-
-        try:
-            return skill.run(skill_payload)
-        except (ProviderResponseError, SchemaValidationError, ValueError) as exc:
-            # Skill 失败仍属于本次运行的可审计结果，不能让异常越过 Core 边界。
-            return {
-                "schemaVersion": AGENT_CORE_SCHEMA_VERSION,
-                "trigger": trigger,
-                "status": "error",
-                "error": {
-                    "code": "SKILL_FAILED",
-                    "message": str(exc),
-                },
-                "requiresUserConfirmation": False,
-            }
+        loop = AgentLoop(skill_registry=self.registry)
+        self.last_loop = loop
+        return loop.run(trigger_or_request, payload)
 
     def _normalize_request(
         self,
