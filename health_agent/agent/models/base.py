@@ -17,6 +17,16 @@ class ProviderConfigurationError(RuntimeError):
 class ProviderResponseError(RuntimeError):
     """Provider response could not be used by the agent runtime."""
 
+    def __init__(
+        self,
+        message: str,
+        code: str = "provider_response_error",
+        safe_summary: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.safe_summary = safe_summary or message
+
 
 class BaseModelProvider(ABC):
     """所有模型 Provider 的最小接口。"""

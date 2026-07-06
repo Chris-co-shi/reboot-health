@@ -22,10 +22,12 @@ from agent.runtime.trace import RunTrace, TraceRecorder
 from agent.schemas.agent import (
     AGENT_RUN_STATUS_COMPLETED,
     AGENT_RUN_STATUS_ERROR,
+    AGENT_RUN_STATUS_FAILED,
     AGENT_RUN_STATUS_UNSUPPORTED,
     AGENT_RUN_STATUS_WAITING_CONFIRMATION,
     FINAL_OUTCOME_COMPLETED,
     FINAL_OUTCOME_ERROR,
+    FINAL_OUTCOME_FAILED,
     FINAL_OUTCOME_MAX_STEPS_EXCEEDED,
     FINAL_OUTCOME_UNSUPPORTED,
     FINAL_OUTCOME_WAITING_CONFIRMATION,
@@ -192,7 +194,23 @@ class AgentLoop:
                 output=output,
                 memory_candidates=self.last_memory_candidates,
             )
-        except (ProviderResponseError, SchemaValidationError, ValueError) as exc:
+        except ProviderResponseError as exc:
+            session.status = RunStatus.FAILED
+            trace.warnings.append(exc.safe_summary)
+            self.trace_recorder.finish(trace, FINAL_OUTCOME_FAILED)
+            output = self._skill_failed(trigger, exc, code=exc.code, status="failed")
+            return self._result(
+                session=session,
+                trace=trace,
+                status=AGENT_RUN_STATUS_FAILED,
+                final_outcome=FINAL_OUTCOME_FAILED,
+                output=output,
+                error=AgentRunError(
+                    code=exc.code,
+                    message=str(exc),
+                ),
+            )
+        except (SchemaValidationError, ValueError) as exc:
             session.status = RunStatus.FAILED
             self.trace_recorder.finish(trace, FINAL_OUTCOME_ERROR)
             output = self._skill_failed(trigger, exc)
@@ -299,14 +317,20 @@ class AgentLoop:
             "requiresUserConfirmation": False,
         }
 
-    def _skill_failed(self, trigger: str, exc: Exception) -> dict[str, Any]:
+    def _skill_failed(
+        self,
+        trigger: str,
+        exc: Exception,
+        code: str = "SKILL_FAILED",
+        status: str = "error",
+    ) -> dict[str, Any]:
         """返回 Skill 失败的兼容错误结构。"""
         return {
             "schemaVersion": CORE_RESULT_SCHEMA_VERSION,
             "trigger": trigger,
-            "status": "error",
+            "status": status,
             "error": {
-                "code": "SKILL_FAILED",
+                "code": code,
                 "message": str(exc),
             },
             "requiresUserConfirmation": False,
