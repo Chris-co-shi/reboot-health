@@ -3,7 +3,9 @@ name = "reboot-health-health-agent"
 version = "0.1.0"
 description = "Python-first Health Agent Backend for reboot-health."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+  "openai>=1.0.0,<2.0.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

@@ -1,5 +1,6 @@
 import unittest
 
+from agent.models.base import BaseModelProvider
 from agent.runtime.core import AgentCore
 from agent.safety.planning_quality import PlanningQualityGate
 from agent.schemas.agent import (
@@ -22,6 +23,31 @@ FORBIDDEN_FACT_CLAIMS = (
 
 
 class InitialPlanningAcceptanceCasesTest(unittest.TestCase):
+    def test_today_action_draft_has_minimum_contract(self) -> None:
+        result = AgentCore.default().run_detailed(
+            "INITIAL_PLANNING",
+            _real_health_sample_payload(),
+        )
+
+        _assert_today_action_contract(self, result.output["todayActionDraft"])
+
+    def test_empty_today_action_gets_safe_fallback(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(
+                _planning_output(
+                    today_action={"status": "draft_requires_confirmation"},
+                )
+            )
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            _real_health_sample_payload(),
+        )
+
+        today = result.output["todayActionDraft"]
+        _assert_today_action_contract(self, today)
+        self.assertIn("基线记录", _flatten(today))
+        self.assertIn("不做 HIIT", _flatten(today))
+
     def test_real_health_sample_requires_confirmation_and_drafts(self) -> None:
         result = AgentCore.default().run_detailed(
             "INITIAL_PLANNING",
@@ -159,6 +185,47 @@ class InitialPlanningAcceptanceCasesTest(unittest.TestCase):
 
         self.assertIn("missing_weekly_downgrade_or_stop_condition", _codes(result))
 
+    def test_questions_added_when_required_profile_info_missing(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(
+                _planning_output(
+                    summary="年龄未知，身高未知，体重未知，用药史未知，场地未知，器械未知，医生限制未知。",
+                )
+            )
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            {"userText": "想开始恢复训练。"},
+        )
+
+        self.assertGreaterEqual(len(result.output["questions"]), 1)
+        self.assertLessEqual(len(result.output["questions"]), 3)
+        self.assertIn("年龄", _flatten(result.output["questions"]))
+
+    def test_no_unknown_age_weight_memory_when_input_contains_profile_info(self) -> None:
+        result = AgentCore.default(
+            provider=_FakeProvider(
+                _planning_output(
+                    today_action={"status": "draft_requires_confirmation"},
+                    understanding_candidates=[
+                        {
+                            "type": "unknown_age_weight_height",
+                            "text": "年龄未知，身高未知，体重未知。",
+                        },
+                        {"type": "status", "text": "想恢复体能"},
+                    ],
+                )
+            )
+        ).run_detailed(
+            "INITIAL_PLANNING",
+            _real_health_sample_payload(),
+        )
+
+        serialized = _flatten(result.to_dict()["memoryCandidates"])
+        self.assertNotIn("unknown_age_weight_height", serialized)
+        self.assertNotIn("年龄未知", serialized)
+        self.assertNotIn("身高未知", serialized)
+        self.assertNotIn("体重未知", serialized)
+
 
 def _real_health_sample_payload() -> dict:
     return {
@@ -186,11 +253,13 @@ def _planning_output(
     summary: str = "生成待确认草案。",
     weekly_plan: dict | None = None,
     today_action: dict | None = None,
+    understanding_candidates: list[dict] | None = None,
 ) -> dict:
     return {
         "schemaVersion": "health-agent.initial-planning.v0",
         "summary": summary,
-        "understandingCandidates": [{"type": "status", "text": "想恢复训练"}],
+        "understandingCandidates": understanding_candidates
+        or [{"type": "status", "text": "想恢复训练"}],
         "healthConstraintCandidates": [{"name": "低强度起步"}],
         "goalCandidates": [{"name": "恢复规律训练"}],
         "programDraft": {
@@ -231,8 +300,12 @@ def _conservative_weekly_plan() -> dict:
 
 def _conservative_today_action() -> dict:
     return {
+        "title": "今日低强度行动草案",
         "status": "draft_requires_confirmation",
         "minimumCompletionStandard": "最低完成：基线记录和10分钟恢复流程。",
+        "downgradeRule": "不适则只做基线记录。",
+        "stopConditions": ["胸闷、头晕或异常心悸则停止。"],
+        "feedbackFields": ["血压", "静息心率", "不适评分"],
         "actions": [
             {
                 "name": "基线记录",
@@ -265,6 +338,37 @@ def _flatten(value) -> str:
 
 def _codes(result) -> set[str]:
     return {finding.code for finding in result.findings}
+
+
+def _assert_today_action_contract(test_case: unittest.TestCase, today: dict) -> None:
+    test_case.assertEqual(today["status"], "draft_requires_confirmation")
+    for key in (
+        "title",
+        "actions",
+        "minimumCompletionStandard",
+        "stopConditions",
+        "feedbackFields",
+    ):
+        test_case.assertIn(key, today)
+    test_case.assertTrue(
+        today.get("downgradeRule") or today.get("downgradeOptions")
+    )
+    test_case.assertIsInstance(today["actions"], list)
+    test_case.assertGreater(len(today["actions"]), 0)
+    test_case.assertIsInstance(today["stopConditions"], list)
+    test_case.assertGreater(len(today["stopConditions"]), 0)
+    test_case.assertIsInstance(today["feedbackFields"], list)
+    test_case.assertGreater(len(today["feedbackFields"]), 0)
+
+
+class _FakeProvider(BaseModelProvider):
+    provider_name = "fake-openai-compatible"
+
+    def __init__(self, output: dict) -> None:
+        self.output = output
+
+    def generate_initial_planning(self, prompt, planning_input):
+        return self.output
 
 
 if __name__ == "__main__":

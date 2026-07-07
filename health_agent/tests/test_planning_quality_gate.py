@@ -49,6 +49,44 @@ class PlanningQualityGateTest(unittest.TestCase):
 
         self.assertIn("hiit_for_low_fitness", _codes(result))
 
+    def test_quality_gate_does_not_warn_when_hiit_is_excluded(self) -> None:
+        output = _planning_output(
+            today_action={
+                "title": "今日低强度行动草案",
+                "status": "draft_requires_confirmation",
+                "actions": [{"name": "基线记录", "detail": "记录血压和不适评分。"}],
+                "minimumCompletionStandard": "最低完成：基线记录。",
+                "downgradeRule": "不适则只记录。",
+                "stopConditions": ["胸闷、头晕或想做 HIIT 时停止并降级。"],
+                "feedbackFields": ["血压", "不适评分"],
+                "exclusions": ["HIIT", "Tabata", "高强度间歇", "极限冲刺"],
+            }
+        )
+
+        result = PlanningQualityGate().evaluate(
+            {"userText": "体能差，篮球两个回合就喘。"},
+            output,
+        )
+
+        self.assertNotIn("hiit_for_low_fitness", _codes(result))
+        self.assertNotIn("today_action_too_large", _codes(result))
+
+    def test_quality_gate_warns_when_hiit_is_recommended(self) -> None:
+        output = _planning_output(
+            weekly_plan={
+                "status": "draft_requires_confirmation",
+                "focus": "首周安排 HIIT 和 Tabata 作为主要训练。",
+                "downgradePlan": "如喘不过气、头晕或胸闷则停止并降级。",
+            }
+        )
+
+        result = PlanningQualityGate().evaluate(
+            {"userText": "体能差，篮球两个回合就喘。"},
+            output,
+        )
+
+        self.assertIn("hiit_for_low_fitness", _codes(result))
+
     def test_quality_gate_warns_heavy_neck_loading_for_cervical_issue(self) -> None:
         output = _planning_output(
             weekly_plan={
@@ -64,6 +102,43 @@ class PlanningQualityGateTest(unittest.TestCase):
         )
 
         self.assertIn("heavy_neck_loading_for_cervical_issue", _codes(result))
+
+    def test_quality_gate_does_not_warn_when_long_swim_is_forbidden(self) -> None:
+        output = _planning_output(
+            today_action={
+                "title": "今日低强度行动草案",
+                "status": "draft_requires_confirmation",
+                "actions": [{"name": "水中呼气", "detail": "只做扶池边呼气练习。"}],
+                "minimumCompletionStandard": "最低完成：基线记录。",
+                "downgradeRule": "呛水则停止。",
+                "stopConditions": ["禁止连续游 1000 米；出现呛水立即停止。"],
+                "feedbackFields": ["呛水次数", "慌乱程度"],
+                "exclusions": ["连续游 1000 米", "高强度游泳"],
+            }
+        )
+
+        result = PlanningQualityGate().evaluate(
+            {"userText": "游泳 25 米都会呛水。"},
+            output,
+        )
+
+        self.assertNotIn("aggressive_swimming_for_choking_risk", _codes(result))
+
+    def test_quality_gate_warns_when_long_swim_is_recommended(self) -> None:
+        output = _planning_output(
+            weekly_plan={
+                "status": "draft_requires_confirmation",
+                "focus": "首周安排高强度游泳，并计划连续游 1000 米。",
+                "downgradePlan": "如呛水、头晕或胸闷则停止并降级。",
+            }
+        )
+
+        result = PlanningQualityGate().evaluate(
+            {"userText": "游泳 25 米都会呛水。"},
+            output,
+        )
+
+        self.assertIn("aggressive_swimming_for_choking_risk", _codes(result))
 
     def test_quality_gate_warns_high_intensity_for_blood_pressure_risk(self) -> None:
         output = _planning_output(
@@ -290,8 +365,12 @@ def _conservative_weekly_plan() -> dict:
 def _conservative_today_action() -> dict:
     return {
         "name": "今日行动草案",
+        "title": "今日行动草案",
         "status": "draft_requires_confirmation",
         "minimumCompletionStandard": "最低完成：基线记录和10分钟恢复流程。",
+        "downgradeRule": "不适则只做基线记录。",
+        "stopConditions": ["胸闷、头晕或异常心悸则停止。"],
+        "feedbackFields": ["血压", "静息心率", "不适评分"],
         "actions": [
             {
                 "name": "基线记录",

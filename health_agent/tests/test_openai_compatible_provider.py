@@ -1,10 +1,13 @@
 import json
-import socket
 import unittest
-import urllib.error
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent.models.base import BaseModelProvider, ProviderConfigurationError, ProviderResponseError
+from agent.models.base import (
+    BaseModelProvider,
+    ProviderConfigurationError,
+    ProviderResponseError,
+)
 from agent.models.openai_compatible import (
     OpenAICompatibleProvider,
     extract_json_object,
@@ -21,6 +24,46 @@ class OpenAICompatibleProviderTest(unittest.TestCase):
 
         self.assertIn("REBOOT_HEALTH_MODEL_BASE_URL", str(context.exception))
 
+    def test_openai_sdk_client_created_with_base_url(self) -> None:
+        captured: dict = {}
+
+        def factory(**kwargs):
+            captured.update(kwargs)
+            return _FakeOpenAISDKClient(content='{"ok": true}')
+
+        OpenAICompatibleProvider(env=_provider_env(), client_factory=factory)
+
+        self.assertEqual(captured["api_key"], _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"])
+        self.assertEqual(captured["base_url"], "https://model.example/v1")
+        self.assertEqual(captured["timeout"], 30.0)
+        self.assertEqual(captured["max_retries"], 0)
+
+    def test_openai_sdk_chat_completion_content_extracted(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        provider = OpenAICompatibleProvider(env=_provider_env(), client=client)
+
+        result = provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        self.assertEqual(result["schemaVersion"], "health-agent.initial-planning.v0")
+        self.assertTrue(result["requiresUserConfirmation"])
+        self.assertEqual(client.calls[0]["model"], "test-model")
+        self.assertEqual(client.calls[0]["messages"][0]["role"], "system")
+        self.assertEqual(client.calls[0]["messages"][1]["role"], "user")
+
+    def test_base_url_rejects_chat_completions_endpoint_or_normalizes_safely(self) -> None:
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_BASE_URL": "https://api.minimaxi.com/v1/chat/completions",
+        }
+
+        with self.assertRaises(ProviderConfigurationError) as context:
+            OpenAICompatibleProvider(env=env, client=_FakeOpenAISDKClient())
+
+        self.assertIn("/chat/completions", str(context.exception))
+        self.assertIn("https://api.minimaxi.com/v1", str(context.exception))
+
     def test_json_code_block_can_be_extracted(self) -> None:
         result = extract_json_object(
             '说明文字\n```json\n{"outer": {"inner": 1}, "ok": true}\n```\n后续说明'
@@ -36,48 +79,128 @@ class OpenAICompatibleProviderTest(unittest.TestCase):
         self.assertTrue(result["requiresUserConfirmation"])
 
     def test_invalid_json_raises_provider_response_error(self) -> None:
-        provider = OpenAICompatibleProvider(env=_provider_env())
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            client=_FakeOpenAISDKClient(content="{bad json}"),
+        )
 
-        with patch("urllib.request.urlopen", return_value=_FakeResponse(_chat_response("{bad json}"))):
-            with self.assertRaises(ProviderResponseError) as context:
-                provider.generate_initial_planning("prompt", {"userText": "想训练"})
+        with self.assertRaises(ProviderResponseError) as context:
+            provider.generate_initial_planning("prompt", {"userText": "想训练"})
 
         self.assertEqual(context.exception.code, "invalid_json")
 
-    def test_openai_provider_timeout_raises_provider_response_error(self) -> None:
-        provider = OpenAICompatibleProvider(env=_provider_env())
+    def test_sdk_api_error_is_wrapped_without_secret(self) -> None:
+        secret = _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"]
+        error = _FakeSDKAPIError(f"server failed with {secret}")
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            client=_FakeOpenAISDKClient(error=error),
+        )
 
-        with patch("urllib.request.urlopen", return_value=_TimeoutResponse()):
-            with self.assertRaises(ProviderResponseError) as context:
-                provider.generate_initial_planning("prompt", {"userText": "想训练"})
-
-        self.assertEqual(context.exception.code, "timeout")
-        self.assertIn("timed out", context.exception.safe_summary)
-
-    def test_openai_provider_url_error_is_structured(self) -> None:
-        provider = OpenAICompatibleProvider(env=_provider_env())
-
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError("network down"),
-        ):
+        with patch("agent.models.openai_compatible.APIError", _FakeSDKAPIError):
             with self.assertRaises(ProviderResponseError) as context:
                 provider.generate_initial_planning("prompt", {"userText": "想训练"})
 
         self.assertEqual(context.exception.code, "provider_response_error")
-        self.assertIn("request failed", context.exception.safe_summary)
+        self.assertNotIn(secret, context.exception.safe_summary)
+        self.assertIn("OpenAI SDK error", context.exception.safe_summary)
 
-    def test_openai_provider_url_timeout_is_structured(self) -> None:
-        provider = OpenAICompatibleProvider(env=_provider_env())
+    def test_sdk_timeout_error_is_wrapped_without_secret(self) -> None:
+        secret = _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"]
+        error = _FakeSDKTimeoutError(f"timeout with {secret}")
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            client=_FakeOpenAISDKClient(error=error),
+        )
 
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError(socket.timeout("read timed out")),
-        ):
+        with patch("agent.models.openai_compatible.APITimeoutError", _FakeSDKTimeoutError):
             with self.assertRaises(ProviderResponseError) as context:
                 provider.generate_initial_planning("prompt", {"userText": "想训练"})
 
         self.assertEqual(context.exception.code, "timeout")
+        self.assertNotIn(secret, context.exception.safe_summary)
+        self.assertIn("timed out", context.exception.safe_summary)
+
+    def test_openai_provider_debug_log_does_not_include_api_key_or_user_text(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            debug_log=True,
+            client=client,
+        )
+        user_text = "这是一段不应进入日志的完整健康输入。"
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning(
+                "system prompt should not be logged",
+                {"userText": user_text, "today": "2026-07-07"},
+            )
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("request_start", serialized)
+        self.assertIn("response_read", serialized)
+        self.assertIn("response_parsed", serialized)
+        self.assertIn("responseFormatPresent", serialized)
+        self.assertIn("systemPromptChars", serialized)
+        self.assertIn("userContentChars", serialized)
+        self.assertIn("payloadBytes", serialized)
+        self.assertNotIn(_provider_env()["REBOOT_HEALTH_MODEL_API_KEY"], serialized)
+        self.assertNotIn("Authorization", serialized)
+        self.assertNotIn(user_text, serialized)
+        self.assertNotIn("system prompt should not be logged", serialized)
+
+    def test_response_format_json_object_is_included_when_configured(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_RESPONSE_FORMAT": "json_object",
+        }
+        provider = OpenAICompatibleProvider(env=env, client=client)
+
+        provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        self.assertEqual(
+            client.calls[0]["response_format"],
+            {"type": "json_object"},
+        )
+        self.assertTrue(provider.last_request_shape["responseFormatPresent"])
+        self.assertEqual(provider.last_request_shape["responseFormatMode"], "json_object")
+
+    def test_response_format_none_is_omitted(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_RESPONSE_FORMAT": "none",
+        }
+        provider = OpenAICompatibleProvider(env=env, client=client)
+
+        provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        self.assertNotIn("response_format", client.calls[0])
+        self.assertFalse(provider.last_request_shape["responseFormatPresent"])
+        self.assertEqual(provider.last_request_shape["responseFormatMode"], "none")
+
+    def test_provider_ping_builds_minimal_payload(self) -> None:
+        client = _FakeOpenAISDKClient(content='{"ok": true}')
+        provider = OpenAICompatibleProvider(env=_provider_env(), client=client)
+
+        result = provider.ping()
+
+        body = client.calls[0]
+        serialized = json.dumps(body, ensure_ascii=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["responseFormat"], "none")
+        self.assertEqual(body["temperature"], 0.0)
+        self.assertEqual(len(body["messages"]), 2)
+        self.assertNotIn("weeklyPlanDraft", serialized)
+        self.assertNotIn("programDraft", serialized)
+        self.assertLess(result["payloadBytes"], 500)
 
     def test_requires_user_confirmation_false_is_forced_safe(self) -> None:
         result = AgentCore.default(
@@ -157,29 +280,39 @@ class _TimeoutProvider(BaseModelProvider):
         )
 
 
-class _FakeResponse:
-    def __init__(self, body: dict) -> None:
-        self.body = body
+class _FakeOpenAISDKClient:
+    def __init__(
+        self,
+        content: str | dict | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.content = '{"ok": true}' if content is None else content
+        self.error = error
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._create_completion)
+        )
 
-    def __enter__(self):
-        return self
+    def _create_completion(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=self.content),
+                )
+            ],
+            _request_id="req-test",
+        )
 
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        return None
 
-    def read(self) -> bytes:
-        return json.dumps(self.body).encode("utf-8")
+class _FakeSDKAPIError(Exception):
+    pass
 
 
-class _TimeoutResponse:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, traceback) -> None:
-        return None
-
-    def read(self) -> bytes:
-        raise TimeoutError("The read operation timed out")
+class _FakeSDKTimeoutError(Exception):
+    pass
 
 
 def _provider_env() -> dict[str, str]:
@@ -187,18 +320,6 @@ def _provider_env() -> dict[str, str]:
         "REBOOT_HEALTH_MODEL_BASE_URL": "https://model.example/v1",
         "REBOOT_HEALTH_MODEL_API_KEY": "placeholder-not-a-secret",
         "REBOOT_HEALTH_MODEL_NAME": "test-model",
-    }
-
-
-def _chat_response(content: str) -> dict:
-    return {
-        "choices": [
-            {
-                "message": {
-                    "content": content,
-                }
-            }
-        ]
     }
 
 

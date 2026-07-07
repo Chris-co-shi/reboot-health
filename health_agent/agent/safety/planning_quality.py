@@ -72,11 +72,16 @@ class PlanningQualityGate:
         findings: list[QualityFinding] = []
         self._check_confirmation(output_data, findings)
         self._check_forbidden_claims(output_text, findings)
-        self._check_cervical_risk(input_text, output_text, findings)
-        self._check_swimming_risk(input_text, output_text, findings)
-        self._check_low_fitness_risk(input_text, output_text, today_text, findings)
+        self._check_cervical_risk(input_text, output_data, findings)
+        self._check_swimming_risk(input_text, output_data, findings)
+        self._check_low_fitness_risk(
+            input_text,
+            output_data,
+            output_data.get("todayActionDraft") or {},
+            findings,
+        )
         self._check_extreme_weight_loss_request(input_text, findings)
-        self._check_blood_pressure_risk(input_text, output_text, findings)
+        self._check_blood_pressure_risk(input_text, output_data, findings)
         self._check_week_one_focus(weekly_text, findings)
         self._check_weekly_downgrade_or_stop(weekly_text, findings)
         self._check_today_minimum_standard(today_text, findings)
@@ -115,11 +120,11 @@ class PlanningQualityGate:
     def _check_cervical_risk(
         self,
         input_text: str,
-        output_text: str,
+        output: Mapping[str, Any],
         findings: list[QualityFinding],
     ) -> None:
         if _contains_any(input_text, rules.CERVICAL_RISK_KEYWORDS) and _has_unsafe_keyword(
-            output_text,
+            output,
             rules.CERVICAL_HIGH_LOAD_KEYWORDS,
         ):
             findings.append(
@@ -132,13 +137,13 @@ class PlanningQualityGate:
     def _check_swimming_risk(
         self,
         input_text: str,
-        output_text: str,
+        output: Mapping[str, Any],
         findings: list[QualityFinding],
     ) -> None:
         if _contains_any(
             input_text,
             rules.SWIM_CHOKING_RISK_KEYWORDS,
-        ) and _has_unsafe_keyword(output_text, rules.AGGRESSIVE_SWIMMING_KEYWORDS):
+        ) and _has_unsafe_keyword(output, rules.AGGRESSIVE_SWIMMING_KEYWORDS):
             findings.append(
                 QualityFinding(
                     code="aggressive_swimming_for_choking_risk",
@@ -149,20 +154,20 @@ class PlanningQualityGate:
     def _check_low_fitness_risk(
         self,
         input_text: str,
-        output_text: str,
-        today_text: str,
+        output: Mapping[str, Any],
+        today_action: Any,
         findings: list[QualityFinding],
     ) -> None:
         if not _contains_any(input_text, rules.LOW_FITNESS_RISK_KEYWORDS):
             return
-        if _has_unsafe_keyword(output_text, rules.LOW_FITNESS_AGGRESSIVE_KEYWORDS):
+        if _has_unsafe_keyword(output, rules.LOW_FITNESS_AGGRESSIVE_KEYWORDS):
             findings.append(
                 QualityFinding(
                     code="hiit_for_low_fitness",
                     message="基础体能很低时，草案不得建议 HIIT、Tabata、高强度间歇或长时间训练。",
                 )
             )
-        if _has_unsafe_keyword(today_text, rules.TODAY_TOO_LARGE_KEYWORDS):
+        if _has_unsafe_keyword(today_action, rules.TODAY_TOO_LARGE_KEYWORDS):
             findings.append(
                 QualityFinding(
                     code="today_action_too_large",
@@ -186,13 +191,13 @@ class PlanningQualityGate:
     def _check_blood_pressure_risk(
         self,
         input_text: str,
-        output_text: str,
+        output: Mapping[str, Any],
         findings: list[QualityFinding],
     ) -> None:
         if _contains_any(
             input_text,
             rules.BLOOD_PRESSURE_RISK_KEYWORDS,
-        ) and _has_unsafe_keyword(output_text, rules.BLOOD_PRESSURE_AGGRESSIVE_KEYWORDS):
+        ) and _has_unsafe_keyword(output, rules.BLOOD_PRESSURE_AGGRESSIVE_KEYWORDS):
             findings.append(
                 QualityFinding(
                     code="high_intensity_for_blood_pressure_risk",
@@ -255,13 +260,106 @@ def _contains_any(text: str, keywords: Iterable[str]) -> bool:
     return any(keyword.lower() in normalized for keyword in keywords)
 
 
-def _has_unsafe_keyword(text: str, keywords: Iterable[str]) -> bool:
-    """匹配危险建议，同时尽量忽略“不要/避免/禁止”等否定语境。"""
+def _has_unsafe_keyword(value: Any, keywords: Iterable[str]) -> bool:
+    """匹配危险建议，忽略 exclusions、停止条件和禁止项中的危险词。"""
+    return _has_unsafe_recommendation(value, keywords, path=())
+
+
+def _has_unsafe_recommendation(
+    value: Any,
+    keywords: Iterable[str],
+    path: tuple[str, ...],
+) -> bool:
+    """递归判断危险词是否出现在推荐或执行语境中。"""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            next_path = (*path, key_text)
+            if _is_safe_context_key(key_text):
+                continue
+            if _has_unsafe_recommendation(item, keywords, next_path):
+                return True
+        return False
+    if isinstance(value, list | tuple | set):
+        return any(_has_unsafe_recommendation(item, keywords, path) for item in value)
+    if value is None:
+        return False
+
+    text = str(value)
     for line in _split_lines(text):
         for keyword in keywords:
-            if keyword.lower() in line.lower() and not _is_negated(line, keyword):
+            if keyword.lower() not in line.lower():
+                continue
+            if _is_negated(line, keyword) or _is_safe_context_path(path):
+                continue
+            if _is_recommendation_context(line, path):
                 return True
     return False
+
+
+def _is_safe_context_key(key: str) -> bool:
+    """识别排除、禁止、停止和安全提醒字段。"""
+    normalized = key.lower().replace("_", "").replace("-", "")
+    return any(
+        token in normalized
+        for token in (
+            "exclusion",
+            "exclude",
+            "donot",
+            "dont",
+            "avoid",
+            "forbid",
+            "forbidden",
+            "stopcondition",
+            "stoprule",
+            "safetynote",
+            "safety",
+            "warning",
+            "contraindication",
+        )
+    ) or key in ("排除", "不做", "禁止", "避免", "停止条件", "安全提醒")
+
+
+def _is_safe_context_path(path: tuple[str, ...]) -> bool:
+    """判断当前字段路径是否位于安全/排除语境中。"""
+    return any(_is_safe_context_key(key) for key in path)
+
+
+def _is_recommendation_context(line: str, path: tuple[str, ...]) -> bool:
+    """判断当前文本是否是在建议、安排或执行语境中。"""
+    lowered = line.lower()
+    if any(
+        keyword in lowered
+        for keyword in (
+            "推荐",
+            "建议",
+            "计划",
+            "执行",
+            "安排",
+            "做",
+            "练",
+            "训练",
+            "prescription",
+            "action",
+            "workout",
+        )
+    ):
+        return True
+    normalized_path = tuple(key.lower().replace("_", "").replace("-", "") for key in path)
+    return any(
+        key in normalized_path
+        for key in (
+            "actions",
+            "items",
+            "detail",
+            "focus",
+            "prescription",
+            "weeklyplandraft",
+            "todayactiondraft",
+            "programdraft",
+            "phasedraft",
+        )
+    )
 
 
 def _is_negated(line: str, keyword: str) -> bool:
