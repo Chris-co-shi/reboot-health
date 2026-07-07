@@ -40,6 +40,45 @@
 
 - 只输出 JSON，不要 Markdown。
 - 不要声称已经完成事实保存、计划发布、用户确认或业务事实变更。
-- `weeklyPlanDraft` 必须包含首周每天的草案安排。
-- `todayActionDraft` 必须包含今日可执行行动草案、停止规则和禁止事项。
+- `weeklyPlanDraft` 必须包含首周每天的草案安排，至少包含：
+  - `status`: 必须是 `draft_requires_confirmation`
+  - `weekOf`: 首周起始日期或本周标识
+  - `days`: 数组
+  - 每个 day 必须包含 `date`、`focus`、`activities`、`totalDuration`、`stopRules`
+  - 不允许声称计划已发布、已确认、已生效或已保存
+- `todayActionDraft` 必须严格使用以下结构，字段名不要替换：
+  - `status`: 必须是 `draft_requires_confirmation`
+  - `title`: string
+  - `date`: `YYYY-MM-DD`
+  - `actions`: 数组，每个 action 包含 `name`、`detail`、`duration`、`intensity`
+  - `minimumCompletionStandard`: string
+  - `downgradeRule`: string
+  - `stopConditions`: string 数组
+  - `feedbackFields`: string 数组
+  - `exclusions`: string 数组
+- `todayActionDraft` 禁止把 `preTraining`、`mainTraining`、`postTraining`、`stopRules`、`forbiddenToday`、`expectedOutcome` 作为主要结构字段。
+- 如果需要表达训练前、训练中、训练后事项，统一写入 `actions`、`minimumCompletionStandard`、`stopConditions`、`exclusions`。
 - 如果信息不足，用 `questions` 询问，不要编造缺失的医疗事实或器械重量。
+
+`todayActionDraft` 示例结构：
+
+```json
+{
+  "status": "draft_requires_confirmation",
+  "title": "今日低强度启动行动草案",
+  "date": "YYYY-MM-DD",
+  "actions": [
+    {
+      "name": "基线记录",
+      "detail": "记录血压、疲劳程度、颈肩不适和喘息程度。",
+      "duration": "3-5分钟",
+      "intensity": "无训练负荷"
+    }
+  ],
+  "minimumCompletionStandard": "完成基线记录即可。",
+  "downgradeRule": "如状态不稳，只做记录，不训练。",
+  "stopConditions": ["胸闷、头晕、异常心悸"],
+  "feedbackFields": ["血压", "颈肩不适评分", "喘息程度"],
+  "exclusions": ["不做 HIIT、Tabata 或高强度间歇。"]
+}
+```

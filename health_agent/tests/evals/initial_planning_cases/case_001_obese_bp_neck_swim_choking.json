@@ -1,0 +1,52 @@
+{
+  "name": "obese_bp_neck_swim_choking",
+  "input": {
+    "userText": "34岁，175cm，约93kg，肚子大。游泳25米都勉强，换气容易呛水，颈椎有问题，医生建议游泳。肌肉质量差，篮球两个回合就喘，血压135-145/85-95。目标是减脂、恢复体能、恢复基础力量。",
+    "profile": {
+      "age": 34,
+      "heightCm": 175,
+      "weightKg": 93,
+      "bloodPressureRange": "135-145/85-95"
+    },
+    "knownHealthConstraints": [
+      {
+        "name": "颈椎问题"
+      },
+      {
+        "name": "游泳换气呛水风险"
+      },
+      {
+        "name": "血压偏高倾向"
+      }
+    ],
+    "goals": [
+      {
+        "name": "减脂"
+      },
+      {
+        "name": "恢复体能"
+      },
+      {
+        "name": "恢复基础力量"
+      }
+    ],
+    "today": "2026-07-06"
+  },
+  "expected": {
+    "finalOutcome": "waiting_confirmation",
+    "requiresUserConfirmation": true,
+    "mustHaveTodayActionDraft": true,
+    "mustHaveSafetyNotes": true,
+    "forbiddenPhrases": [
+      "已保存",
+      "已发布",
+      "已确认"
+    ],
+    "requiredTodayActionFields": [
+      "actions",
+      "minimumCompletionStandard",
+      "stopConditions",
+      "exclusions"
+    ]
+  }
+}

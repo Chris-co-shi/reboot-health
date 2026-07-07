@@ -10,6 +10,27 @@ from typing import Any
 from uuid import uuid4
 
 
+TRACE_STEP_ALLOWED_FIELDS = {
+    "name",
+    "status",
+    "elapsedMs",
+    "provider",
+    "model",
+    "topLevelKeys",
+    "fieldTypes",
+    "warningCount",
+    "qualityWarningCount",
+    "qualityErrorCount",
+    "todayActionDraftSource",
+    "todayActionDraftMissingFields",
+    "payloadBytes",
+    "contentChars",
+    "selectedSkill",
+    "step",
+    "memoryCandidateCount",
+}
+
+
 @dataclass
 class RunTrace:
     """一次 AgentRun 的最小追踪摘要。"""
@@ -63,7 +84,7 @@ class TraceRecorder:
 
     def record_step(self, trace: RunTrace, name: str, detail: dict[str, Any]) -> None:
         """记录一个运行步骤。"""
-        trace.steps.append({"name": name, **detail})
+        trace.steps.append(_sanitize_step(name, detail))
 
     def record_tool_call(self, trace: RunTrace, call: dict[str, Any]) -> None:
         """记录一次 Tool 调用摘要。"""
@@ -82,3 +103,62 @@ class TraceRecorder:
     def all(self) -> tuple[RunTrace, ...]:
         """返回 trace 快照。"""
         return tuple(self._traces)
+
+
+def _sanitize_step(name: str, detail: dict[str, Any]) -> dict[str, Any]:
+    """只保留 trace step 的结构化摘要字段。"""
+    payload = {"name": name, "status": "ok", "elapsedMs": 0, **dict(detail or {})}
+    return {
+        key: _sanitize_value(value)
+        for key, value in payload.items()
+        if key in TRACE_STEP_ALLOWED_FIELDS
+    }
+
+
+def _sanitize_value(value: Any) -> Any:
+    """限制 trace 值的形状，避免误记录大段文本或凭据。"""
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_value(item)
+            for key, item in value.items()
+            if not _is_sensitive_key(str(key))
+        }
+    if isinstance(value, list | tuple):
+        return [_sanitize_value(item) for item in value[:50]]
+    if isinstance(value, str):
+        return _redact_text(value)[:180]
+    return value
+
+
+def _is_sensitive_key(key: str) -> bool:
+    """识别不允许进入 trace 的字段名。"""
+    normalized = key.lower().replace("-", "_")
+    return (
+        normalized in {
+            "api_key",
+            "apikey",
+            "authorization",
+            "auth_token",
+            "access_token",
+            "refresh_token",
+            "token",
+            "secret",
+            "client_secret",
+            "password",
+            "prompt",
+            "user_text",
+            "usertext",
+            "response",
+            "content",
+        }
+        or normalized.endswith("_token")
+        or normalized.endswith("_secret")
+    )
+
+
+def _redact_text(value: str) -> str:
+    """移除常见认证片段。"""
+    text = value.replace("Bearer ", "Bearer <redacted> ")
+    if "sk-" in text:
+        return "sk-<redacted>"
+    return text

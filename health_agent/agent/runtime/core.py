@@ -15,7 +15,6 @@ from agent.runtime.result import AgentRunResult
 from agent.skills.initial_planning import InitialPlanningSkill
 from agent.skills.registry import SkillRegistry
 
-
 AGENT_CORE_SCHEMA_VERSION = "health-agent.core.v0"
 
 
@@ -43,9 +42,9 @@ class AgentCore:
         return cls(registry=registry)
 
     def run(
-        self,
-        trigger_or_request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None = None,
+            self,
+            trigger_or_request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """执行一次触发请求，并返回可序列化的结果字典。
 
@@ -58,9 +57,9 @@ class AgentCore:
         return loop.run(trigger_or_request, payload)
 
     def run_detailed(
-        self,
-        trigger_or_request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None = None,
+            self,
+            trigger_or_request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None = None,
     ) -> AgentRunResult:
         """执行一次触发请求，并返回稳定 AgentRunResult 合同。"""
         loop = AgentLoop(skill_registry=self.registry)
@@ -68,9 +67,9 @@ class AgentCore:
         return loop.run_detailed(trigger_or_request, payload)
 
     def _normalize_request(
-        self,
-        trigger_or_request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None,
+            self,
+            trigger_or_request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None,
     ) -> tuple[str, Mapping[str, Any]]:
         """把宽松请求格式压缩成 Core 内部唯一使用的 trigger/payload 形式。"""
         if isinstance(trigger_or_request, str):

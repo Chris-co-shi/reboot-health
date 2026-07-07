@@ -7,14 +7,20 @@ from unittest.mock import patch
 
 from agent.skills.initial_planning import _load_prompt
 from scripts.smoke_initial_planning import (
+    DIAGNOSTIC_DEFAULTS,
     MINIMAL_CONTRACT_PROMPT,
+    MINIMAL_CONTRACT_SCHEMA_VERSION,
     SAMPLE_PAYLOAD,
+    _apply_diagnostic_defaults,
     _env_flag,
     _load_dotenv_file,
+    _minimal_contract_failures,
     _minimal_contract_payload,
+    _model_debug_enabled,
     _parse_dotenv_line,
     _redacted_draft_summary,
     _redacted_summary,
+    _redacted_trace,
 )
 
 
@@ -96,6 +102,24 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
         with patch.dict(os.environ, {"REBOOT_HEALTH_MODEL_DEBUG_LOG": "1"}):
             self.assertTrue(_env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG"))
 
+    def test_diagnostic_defaults_are_safe(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            for key in DIAGNOSTIC_DEFAULTS:
+                os.environ.pop(key, None)
+
+            applied = _apply_diagnostic_defaults()
+
+            self.assertEqual(set(applied), set(DIAGNOSTIC_DEFAULTS))
+            self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_DEBUG_LOG"], "false")
+            self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_LOG_REQUEST"], "none")
+            self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_LOG_RESPONSE"], "none")
+            self.assertEqual(os.environ["REBOOT_HEALTH_AGENT_DEBUG_TRACE"], "false")
+
+    def test_model_debug_log_cli_overrides_environment(self) -> None:
+        with patch.dict(os.environ, {"REBOOT_HEALTH_MODEL_DEBUG_LOG": "false"}):
+            self.assertFalse(_model_debug_enabled(cli_enabled=False))
+            self.assertTrue(_model_debug_enabled(cli_enabled=True))
+
     def test_smoke_loads_model_config_from_dotenv(self) -> None:
         keys = (
             "REBOOT_HEALTH_AGENT_PROVIDER",
@@ -103,6 +127,10 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
             "REBOOT_HEALTH_MODEL_API_KEY",
             "REBOOT_HEALTH_MODEL_NAME",
             "REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS",
+            "REBOOT_HEALTH_MODEL_DEBUG_LOG",
+            "REBOOT_HEALTH_MODEL_LOG_REQUEST",
+            "REBOOT_HEALTH_MODEL_LOG_RESPONSE",
+            "REBOOT_HEALTH_AGENT_DEBUG_TRACE",
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             dotenv_path = Path(temp_dir) / ".env"
@@ -114,6 +142,10 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
                         "REBOOT_HEALTH_MODEL_API_KEY=placeholder-test-key",
                         "REBOOT_HEALTH_MODEL_NAME=test-model",
                         "REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS=120",
+                        "REBOOT_HEALTH_MODEL_DEBUG_LOG=true",
+                        "REBOOT_HEALTH_MODEL_LOG_REQUEST=preview",
+                        "REBOOT_HEALTH_MODEL_LOG_RESPONSE=none",
+                        "REBOOT_HEALTH_AGENT_DEBUG_TRACE=true",
                     )
                 ),
                 encoding="utf-8",
@@ -141,6 +173,10 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
                     os.environ["REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS"],
                     "120",
                 )
+                self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_DEBUG_LOG"], "true")
+                self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_LOG_REQUEST"], "preview")
+                self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_LOG_RESPONSE"], "none")
+                self.assertEqual(os.environ["REBOOT_HEALTH_AGENT_DEBUG_TRACE"], "true")
 
     def test_dotenv_does_not_override_existing_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,6 +217,35 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
         self.assertNotIn("weeklyPlanDraft", MINIMAL_CONTRACT_PROMPT)
         self.assertNotIn("weeklyPlanDraft", serialized_payload)
 
+    def test_minimal_contract_fails_when_today_action_draft_is_string(self) -> None:
+        failures = _minimal_contract_failures(
+            {
+                "schemaVersion": MINIMAL_CONTRACT_SCHEMA_VERSION,
+                "summary": "待确认草案。",
+                "requiresUserConfirmation": True,
+                "todayActionDraft": "今天低强度训练即可。",
+            }
+        )
+
+        self.assertIn("todayActionDraft_must_be_object", failures)
+
+    def test_minimal_contract_passes_with_valid_today_action_draft(self) -> None:
+        failures = _minimal_contract_failures(
+            {
+                "schemaVersion": MINIMAL_CONTRACT_SCHEMA_VERSION,
+                "summary": "待确认草案。",
+                "requiresUserConfirmation": True,
+                "todayActionDraft": {
+                    "status": "draft_requires_confirmation",
+                    "actions": [{"name": "记录血压和疲劳程度"}],
+                    "minimumCompletionStandard": "完成基线记录即可。",
+                    "stopConditions": ["胸闷、头晕或异常心悸时停止。"],
+                },
+            }
+        )
+
+        self.assertEqual(failures, [])
+
     def test_smoke_default_input_contains_real_health_baseline_without_printing_it(self) -> None:
         text = SAMPLE_PAYLOAD["userText"]
         for phrase in (
@@ -206,6 +271,19 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
         summary = _redacted_summary(_agent_run_result(include_user_text=True))
         serialized = json.dumps(summary, ensure_ascii=False)
         self.assertNotIn(FULL_USER_TEXT, serialized)
+
+    def test_redacted_trace_does_not_include_full_user_text(self) -> None:
+        result = _agent_run_result(include_user_text=True)
+
+        trace = _redacted_trace(
+            result["trace"],
+            source_payload={"userText": FULL_USER_TEXT},
+        )
+
+        serialized = json.dumps(trace, ensure_ascii=False)
+        self.assertIn("steps", serialized)
+        self.assertNotIn(FULL_USER_TEXT, serialized)
+        self.assertIn("<redacted-health-input>", serialized)
 
 
 def _agent_run_result(

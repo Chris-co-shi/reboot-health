@@ -1,0 +1,28 @@
+{
+  "userText": "我想从低强度开始恢复体能，先做一份需要确认的首周计划草案。",
+  "profile": {
+    "age": 34,
+    "heightCm": 175,
+    "weightKg": 93
+  },
+  "knownHealthConstraints": [
+    {
+      "name": "血压偏高倾向"
+    },
+    {
+      "name": "颈肩不适，需要保守训练"
+    }
+  ],
+  "goals": [
+    {
+      "name": "减脂"
+    },
+    {
+      "name": "恢复基础体能"
+    }
+  ],
+  "preferences": {
+    "trainingMode": "徒手为主，健身房辅助",
+    "language": "zh-CN"
+  }
+}

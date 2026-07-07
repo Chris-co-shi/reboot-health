@@ -55,6 +55,8 @@ class OpenAICompatibleProvider(BaseModelProvider):
     TIMEOUT_ENV = "REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS"
     DEBUG_LOG_ENV = "REBOOT_HEALTH_MODEL_DEBUG_LOG"
     RESPONSE_FORMAT_ENV = "REBOOT_HEALTH_MODEL_RESPONSE_FORMAT"
+    LOG_REQUEST_ENV = "REBOOT_HEALTH_MODEL_LOG_REQUEST"
+    LOG_RESPONSE_ENV = "REBOOT_HEALTH_MODEL_LOG_RESPONSE"
 
     LEGACY_BASE_URL_ENV = "AGENT_OPENAI_BASE_URL"
     LEGACY_API_KEY_ENV = "AGENT_OPENAI_API_KEY"
@@ -62,6 +64,8 @@ class OpenAICompatibleProvider(BaseModelProvider):
     LEGACY_TIMEOUT_ENV = "AGENT_OPENAI_TIMEOUT_SECONDS"
     LEGACY_DEBUG_LOG_ENV = "AGENT_OPENAI_DEBUG_LOG"
     LEGACY_RESPONSE_FORMAT_ENV = "AGENT_OPENAI_RESPONSE_FORMAT"
+    LEGACY_LOG_REQUEST_ENV = "AGENT_OPENAI_LOG_REQUEST"
+    LEGACY_LOG_RESPONSE_ENV = "AGENT_OPENAI_LOG_RESPONSE"
 
     def __init__(
         self,
@@ -100,6 +104,20 @@ class OpenAICompatibleProvider(BaseModelProvider):
                 source,
                 self.RESPONSE_FORMAT_ENV,
                 self.LEGACY_RESPONSE_FORMAT_ENV,
+            )
+        )
+        self.log_request = _read_log_payload(
+            _read_optional(
+                source,
+                self.LOG_REQUEST_ENV,
+                self.LEGACY_LOG_REQUEST_ENV,
+            )
+        )
+        self.log_response = _read_log_response(
+            _read_optional(
+                source,
+                self.LOG_RESPONSE_ENV,
+                self.LEGACY_LOG_RESPONSE_ENV,
             )
         )
         self.debug_log = (
@@ -182,6 +200,7 @@ class OpenAICompatibleProvider(BaseModelProvider):
             payload_bytes=payload_bytes,
         )
         self.last_request_shape = dict(request_shape)
+        self._log_request_built(request_kwargs)
         started = time.monotonic()
         self._log_debug(
             "request_start",
@@ -229,6 +248,7 @@ class OpenAICompatibleProvider(BaseModelProvider):
 
         elapsed_ms = _elapsed_ms(started)
         content = _completion_content(completion)
+        self._log_response_content(content)
         self._log_debug(
             "response_read",
             elapsedMs=elapsed_ms,
@@ -326,6 +346,12 @@ class OpenAICompatibleProvider(BaseModelProvider):
             contentType="json_object",
             topLevelKeys=sorted(str(key) for key in parsed.keys()),
         )
+        self._log_debug(
+            "provider_json_parsed",
+            elapsedMs=elapsed_ms,
+            topLevelKeys=sorted(str(key) for key in parsed.keys()),
+            fieldTypes=_field_types(parsed),
+        )
         return parsed
 
     def _chat_completions_endpoint(self) -> str:
@@ -374,6 +400,69 @@ class OpenAICompatibleProvider(BaseModelProvider):
             "openai_compatible_provider %s",
             json.dumps(payload, ensure_ascii=False, sort_keys=True),
         )
+
+    def _log_request_built(self, request_kwargs: Mapping[str, Any]) -> None:
+        """按显式开关输出请求正文诊断，默认不输出 prompt/user content。"""
+        messages = request_kwargs.get("messages")
+        message_items = messages if isinstance(messages, list) else []
+        system_prompt = ""
+        user_content = ""
+        if message_items:
+            first = message_items[0]
+            if isinstance(first, Mapping):
+                system_prompt = str(first.get("content") or "")
+            second = message_items[1] if len(message_items) > 1 else None
+            if isinstance(second, Mapping):
+                user_content = str(second.get("content") or "")
+        payload: dict[str, Any] = {
+            "mode": self.log_request,
+            "model": request_kwargs.get("model"),
+            "temperature": request_kwargs.get("temperature"),
+            "messageCount": len(message_items),
+            "responseFormatPresent": "response_format" in request_kwargs,
+        }
+        if self.log_request == "none":
+            self._log_debug("provider_request_built", **payload)
+            return
+        safe_system = _redact_sensitive_text(
+            system_prompt,
+            extra_secrets=(self._api_key,),
+            collapse_whitespace=False,
+        )
+        safe_user = _redact_sensitive_text(
+            user_content,
+            extra_secrets=(self._api_key,),
+            collapse_whitespace=False,
+        )
+        if self.log_request == "raw":
+            payload["systemPromptRaw"] = safe_system
+            payload["userContentRaw"] = safe_user
+        else:
+            payload["systemPromptPreview"] = safe_system[:2000]
+            payload["userContentPreview"] = safe_user[:2000]
+        self._log_debug("provider_request_built", **payload)
+
+    def _log_response_content(self, content: Any) -> None:
+        """按显式开关输出模型返回正文诊断，默认不输出正文。"""
+        text = _content_text(content)
+        payload: dict[str, Any] = {
+            "mode": self.log_response,
+            "contentType": type(content).__name__,
+            "contentChars": len(text),
+        }
+        if self.log_response == "none":
+            self._log_debug("provider_response_raw", **payload)
+            return
+        safe_text = _redact_sensitive_text(
+            text,
+            extra_secrets=(self._api_key,),
+            collapse_whitespace=False,
+        )
+        if self.log_response == "raw":
+            payload["contentRaw"] = safe_text
+        else:
+            payload["contentPreview"] = safe_text[:2000]
+        self._log_debug("provider_response_raw", **payload)
 
 
 def extract_json_object(text: str) -> Mapping[str, Any]:
@@ -502,6 +591,25 @@ def _read_response_format(value: str | None) -> str:
     )
 
 
+def _read_log_payload(value: str | None) -> str:
+    """读取请求/响应正文日志模式；默认不输出正文。"""
+    if value is None or not str(value).strip():
+        return "none"
+    normalized = str(value).strip().lower()
+    if normalized in ("none", "off", "disabled", "false", "0"):
+        return "none"
+    if normalized in ("preview", "raw"):
+        return normalized
+    raise ProviderConfigurationError(
+        "Invalid provider payload log mode: expected none, preview or raw"
+    )
+
+
+def _read_log_response(value: str | None) -> str:
+    """读取模型响应正文日志模式；默认不输出正文。"""
+    return _read_log_payload(value)
+
+
 def _read_bool(value: str | None) -> bool:
     """读取布尔开关。"""
     if value is None:
@@ -539,6 +647,15 @@ def _content_chars(content: Any) -> int:
     return len(json.dumps(content, ensure_ascii=False, default=str))
 
 
+def _content_text(content: Any) -> str:
+    """把模型 content 转成诊断文本。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False, default=str)
+
+
 def _elapsed_ms(started: float) -> int:
     """返回从 started 到当前的毫秒数。"""
     return max(0, int((time.monotonic() - started) * 1000))
@@ -556,6 +673,11 @@ def _sdk_error_summary(exc: Exception) -> str:
     return _redact_sensitive_text(", ".join(parts))
 
 
+def _field_types(value: Mapping[str, Any]) -> dict[str, str]:
+    """返回顶层字段的 Python 类型名称。"""
+    return {str(key): type(item).__name__ for key, item in value.items()}
+
+
 def _sanitize_log_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
     """递归清理日志字段，避免密钥、认证头或大段文本进入日志。"""
     sanitized: dict[str, Any] = {}
@@ -563,6 +685,11 @@ def _sanitize_log_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
         key_text = str(key)
         if _is_sensitive_key(key_text):
             sanitized[key_text] = "<redacted>"
+        elif key_text in _LONG_DIAGNOSTIC_TEXT_KEYS and isinstance(value, str):
+            sanitized[key_text] = _redact_sensitive_text(
+                value,
+                collapse_whitespace=False,
+            )
         else:
             sanitized[key_text] = _sanitize_log_value(value)
     return sanitized
@@ -597,8 +724,27 @@ def _is_sensitive_key(key: str) -> bool:
     )
 
 
-def _redact_sensitive_text(value: str) -> str:
+_LONG_DIAGNOSTIC_TEXT_KEYS = {
+    "contentPreview",
+    "contentRaw",
+    "systemPromptPreview",
+    "systemPromptRaw",
+    "userContentPreview",
+    "userContentRaw",
+}
+
+
+def _redact_sensitive_text(
+    value: str,
+    extra_secrets: tuple[str, ...] = (),
+    collapse_whitespace: bool = True,
+) -> str:
     """对潜在敏感片段做最小脱敏，并压缩空白。"""
     text = re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer <redacted>", value)
     text = re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-<redacted>", text)
-    return " ".join(text.split())
+    for secret in extra_secrets:
+        if secret:
+            text = text.replace(secret, "<redacted>")
+    if collapse_whitespace:
+        return " ".join(text.split())
+    return text

@@ -1,4 +1,7 @@
+import json
+import os
 import unittest
+from unittest.mock import patch
 
 from agent import AgentCore
 from agent.runtime.loop import AgentLoop, LoopLimits
@@ -53,6 +56,40 @@ class AgentRunResultContractTest(unittest.TestCase):
         self.assertEqual(trace["selectedSkill"], "INITIAL_PLANNING")
         self.assertEqual(trace["finalOutcome"], FINAL_OUTCOME_WAITING_CONFIRMATION)
         self.assertEqual(trace["provider"], "mock")
+
+    def test_trace_summary_contains_l2_steps_without_sensitive_content(self) -> None:
+        user_text = "这是一段不应进入 trace 的完整健康原文，包含血压和训练偏好。"
+        api_key = "placeholder-not-a-real-api-key"
+
+        with patch.dict(os.environ, {"REBOOT_HEALTH_MODEL_API_KEY": api_key}):
+            result = AgentLoop.default().run_detailed(
+                "INITIAL_PLANNING",
+                {"userText": user_text},
+            )
+
+        trace = result.to_dict()["trace"]
+        step_names = [step["name"] for step in trace["steps"]]
+        for name in (
+            "run_started",
+            "context_built",
+            "skill_selected",
+            "skill_started",
+            "provider_request_sent",
+            "provider_response_received",
+            "provider_json_parsed",
+            "skill_provider_output_received",
+            "skill_output_mapped",
+            "runtime_boundaries_applied",
+            "schema_validated",
+            "quality_gate_checked",
+            "memory_candidates_built",
+            "run_finished",
+        ):
+            self.assertIn(name, step_names)
+
+        serialized = json.dumps(trace, ensure_ascii=False)
+        self.assertNotIn(user_text, serialized)
+        self.assertNotIn(api_key, serialized)
 
     def test_agent_run_result_contains_memory_candidates(self) -> None:
         result = AgentLoop.default().run_detailed(

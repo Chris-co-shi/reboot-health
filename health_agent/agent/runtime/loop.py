@@ -39,7 +39,6 @@ from agent.skills.registry import SkillRegistry
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
-
 CORE_RESULT_SCHEMA_VERSION = "health-agent.core.v0"
 
 
@@ -60,16 +59,16 @@ class AgentLoop:
     """
 
     def __init__(
-        self,
-        skill_registry: SkillRegistry | None = None,
-        tool_registry: ToolRegistry | None = None,
-        tool_executor: ToolExecutor | None = None,
-        context_builder: ContextBuilder | None = None,
-        session_store: InMemorySessionStore | None = None,
-        trace_recorder: TraceRecorder | None = None,
-        memory_candidate_builder: MemoryCandidateBuilder | None = None,
-        planning_quality_gate: PlanningQualityGate | None = None,
-        limits: LoopLimits | None = None,
+            self,
+            skill_registry: SkillRegistry | None = None,
+            tool_registry: ToolRegistry | None = None,
+            tool_executor: ToolExecutor | None = None,
+            context_builder: ContextBuilder | None = None,
+            session_store: InMemorySessionStore | None = None,
+            trace_recorder: TraceRecorder | None = None,
+            memory_candidate_builder: MemoryCandidateBuilder | None = None,
+            planning_quality_gate: PlanningQualityGate | None = None,
+            limits: LoopLimits | None = None,
     ) -> None:
         self.skill_registry = skill_registry or SkillRegistry()
         self.tool_registry = tool_registry or ToolRegistry()
@@ -78,7 +77,7 @@ class AgentLoop:
         self.session_store = session_store or InMemorySessionStore()
         self.trace_recorder = trace_recorder or TraceRecorder()
         self.memory_candidate_builder = (
-            memory_candidate_builder or MemoryCandidateBuilder()
+                memory_candidate_builder or MemoryCandidateBuilder()
         )
         self.planning_quality_gate = planning_quality_gate or PlanningQualityGate()
         self.limits = limits or LoopLimits()
@@ -94,18 +93,18 @@ class AgentLoop:
         return cls(skill_registry=registry, limits=limits)
 
     def run(
-        self,
-        request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None = None,
+            self,
+            request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """运行一次 Agent 请求，并返回 Skill 兼容输出。"""
         result = self.run_detailed(request, payload)
         return dict(result.output or {})
 
     def run_detailed(
-        self,
-        request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None = None,
+            self,
+            request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None = None,
     ) -> AgentRunResult:
         """运行一次 Agent 请求，并返回稳定 AgentRunResult 合同。"""
         trigger, skill_payload, session_id = self._normalize_request(request, payload)
@@ -118,11 +117,23 @@ class AgentLoop:
             provider=self._provider_name_for(trigger),
         )
         self.last_trace = trace
+        self.trace_recorder.record_step(
+            trace,
+            "run_started",
+            {
+                "provider": trace.provider,
+            },
+        )
 
         if self.limits.max_steps <= 0:
             session.status = RunStatus.FAILED
             trace.warnings.append("max_steps_exceeded")
             self.trace_recorder.finish(trace, FINAL_OUTCOME_MAX_STEPS_EXCEEDED)
+            self.trace_recorder.record_step(
+                trace,
+                "run_finished",
+                {"status": FINAL_OUTCOME_MAX_STEPS_EXCEEDED},
+            )
             output = self._max_steps_exceeded(trigger)
             return self._result(
                 session=session,
@@ -140,6 +151,11 @@ class AgentLoop:
         if skill is None:
             session.status = RunStatus.FAILED
             self.trace_recorder.finish(trace, FINAL_OUTCOME_UNSUPPORTED)
+            self.trace_recorder.record_step(
+                trace,
+                "run_finished",
+                {"status": FINAL_OUTCOME_UNSUPPORTED},
+            )
             output = self._unsupported(trigger)
             return self._result(
                 session=session,
@@ -162,7 +178,18 @@ class AgentLoop:
         self.trace_recorder.record_step(
             trace,
             "context_built",
-            {"contextSummary": context.summary},
+            {
+                "status": "ok",
+            },
+        )
+        self.trace_recorder.record_step(
+            trace,
+            "skill_selected",
+            {
+                "selectedSkill": trigger,
+                "provider": trace.provider,
+                "model": self._provider_model_for(skill),
+            },
         )
 
         try:
@@ -170,9 +197,20 @@ class AgentLoop:
             self.trace_recorder.record_step(
                 trace,
                 "skill_started",
-                {"selectedSkill": trigger, "step": session.turns},
+                {
+                    "selectedSkill": trigger,
+                    "step": session.turns,
+                    "provider": trace.provider,
+                    "model": self._provider_model_for(skill),
+                },
             )
             output = skill.run(context.skill_payload)
+            for step in getattr(skill, "last_trace_steps", []):
+                if isinstance(step, Mapping):
+                    name = str(step.get("name") or "")
+                    detail = {key: value for key, value in step.items() if key != "name"}
+                    if name:
+                        self.trace_recorder.record_step(trace, name, detail)
             if trigger == "INITIAL_PLANNING":
                 quality_result = self.planning_quality_gate.evaluate(
                     context.skill_payload,
@@ -183,6 +221,7 @@ class AgentLoop:
                     trace,
                     "quality_gate_checked",
                     {
+                        "warningCount": len(trace.warnings),
                         "qualityWarningCount": quality_result.count_by_severity(
                             "warning"
                         ),
@@ -194,6 +233,13 @@ class AgentLoop:
                 if trigger == "INITIAL_PLANNING"
                 else []
             )
+            self.trace_recorder.record_step(
+                trace,
+                "memory_candidates_built",
+                {
+                    "memoryCandidateCount": len(self.last_memory_candidates),
+                },
+            )
             final_outcome = self._final_outcome_for(output)
             if final_outcome == "waiting_confirmation":
                 session.status = RunStatus.WAITING_CONFIRMATION
@@ -201,6 +247,11 @@ class AgentLoop:
             else:
                 session.status = RunStatus.COMPLETED
             self.trace_recorder.finish(trace, final_outcome)
+            self.trace_recorder.record_step(
+                trace,
+                "run_finished",
+                {"status": final_outcome, "warningCount": len(trace.warnings)},
+            )
             return self._result(
                 session=session,
                 trace=trace,
@@ -217,6 +268,11 @@ class AgentLoop:
             session.status = RunStatus.FAILED
             trace.warnings.append(exc.safe_summary)
             self.trace_recorder.finish(trace, FINAL_OUTCOME_FAILED)
+            self.trace_recorder.record_step(
+                trace,
+                "run_finished",
+                {"status": FINAL_OUTCOME_FAILED, "warningCount": len(trace.warnings)},
+            )
             output = self._skill_failed(trigger, exc, code=exc.code, status="failed")
             return self._result(
                 session=session,
@@ -232,6 +288,11 @@ class AgentLoop:
         except (SchemaValidationError, ValueError) as exc:
             session.status = RunStatus.FAILED
             self.trace_recorder.finish(trace, FINAL_OUTCOME_ERROR)
+            self.trace_recorder.record_step(
+                trace,
+                "run_finished",
+                {"status": FINAL_OUTCOME_ERROR, "warningCount": len(trace.warnings)},
+            )
             output = self._skill_failed(trigger, exc)
             return self._result(
                 session=session,
@@ -246,9 +307,9 @@ class AgentLoop:
             )
 
     def _normalize_request(
-        self,
-        request: str | Mapping[str, Any],
-        payload: Mapping[str, Any] | None,
+            self,
+            request: str | Mapping[str, Any],
+            payload: Mapping[str, Any] | None,
     ) -> tuple[str, Mapping[str, Any], str | None]:
         """归一化宽松请求格式。"""
         if isinstance(request, str):
@@ -286,15 +347,24 @@ class AgentLoop:
         provider_name = getattr(provider, "provider_name", None)
         return str(provider_name) if provider_name else "unknown"
 
+    def _provider_model_for(self, skill: Any) -> str:
+        """识别当前 Skill Provider model；无法识别时返回 provider 名称或 unknown。"""
+        provider = getattr(skill, "provider", None)
+        model = getattr(provider, "model", None)
+        if model:
+            return str(model)
+        provider_name = getattr(provider, "provider_name", None)
+        return str(provider_name) if provider_name else "unknown"
+
     def _result(
-        self,
-        session: AgentSession,
-        trace: RunTrace,
-        status: str,
-        final_outcome: str,
-        output: Mapping[str, Any],
-        memory_candidates: tuple[MemoryCandidate, ...] = (),
-        error: AgentRunError | None = None,
+            self,
+            session: AgentSession,
+            trace: RunTrace,
+            status: str,
+            final_outcome: str,
+            output: Mapping[str, Any],
+            memory_candidates: tuple[MemoryCandidate, ...] = (),
+            error: AgentRunError | None = None,
     ) -> AgentRunResult:
         """构造稳定 AgentRunResult。"""
         return AgentRunResult(
@@ -337,11 +407,11 @@ class AgentLoop:
         }
 
     def _skill_failed(
-        self,
-        trigger: str,
-        exc: Exception,
-        code: str = "SKILL_FAILED",
-        status: str = "error",
+            self,
+            trigger: str,
+            exc: Exception,
+            code: str = "SKILL_FAILED",
+            status: str = "error",
     ) -> dict[str, Any]:
         """返回 Skill 失败的兼容错误结构。"""
         return {

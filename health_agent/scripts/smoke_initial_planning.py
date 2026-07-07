@@ -19,6 +19,12 @@ from agent.runtime.core import AgentCore
 from agent.models.base import ProviderConfigurationError, ProviderResponseError
 from agent.models.openai_compatible import OpenAICompatibleProvider
 
+DIAGNOSTIC_DEFAULTS = {
+    "REBOOT_HEALTH_MODEL_DEBUG_LOG": "false",
+    "REBOOT_HEALTH_MODEL_LOG_REQUEST": "none",
+    "REBOOT_HEALTH_MODEL_LOG_RESPONSE": "none",
+    "REBOOT_HEALTH_AGENT_DEBUG_TRACE": "false",
+}
 
 SAMPLE_PAYLOAD = {
     "userText": (
@@ -49,14 +55,24 @@ SAMPLE_PAYLOAD = {
     "today": "2026-07-06",
 }
 
+MINIMAL_CONTRACT_SCHEMA_VERSION = "health-agent.initial-planning.minimal-diagnostic.v0"
+
 MINIMAL_CONTRACT_PROMPT = """你是健康计划草案诊断模式。
-只返回一个 JSON object，不要 markdown，不要解释。
-字段必须且只需要包含：
-- schemaVersion: "health-agent.initial-planning.minimal-diagnostic.v0"
-- summary: 一句话说明这是待确认草案
-- todayActionDraft: 保守、低强度、待确认的今日行动草案
-- requiresUserConfirmation: true
+只返回一个根 JSON object；不要 markdown、解释或字符串化 JSON。
+根对象顶层字段必须且只允许：schemaVersion、summary、requiresUserConfirmation、todayActionDraft。
+schemaVersion="health-agent.initial-planning.minimal-diagnostic.v0"；requiresUserConfirmation=true。
+todayActionDraft 必须是 JSON object，不能是字符串或数组。
+
+严禁以下错误结构：
+- 禁止只返回 todayActionDraft 内部对象。
+- 禁止把 actions、status、stopConditions 放在根对象。
+- actions、status、minimumCompletionStandard、stopConditions 只能在 todayActionDraft 内部。
+
+todayActionDraft 内至少包含：status="draft_requires_confirmation"、actions 非空 array、minimumCompletionStandard 非空字符串、stopConditions 非空 array。
 不得声称已经保存、发布、确认或修改事实。
+
+合法 JSON 示例：
+{"schemaVersion":"health-agent.initial-planning.minimal-diagnostic.v0","summary":"这是待用户确认的保守今日行动草案。","requiresUserConfirmation":true,"todayActionDraft":{"status":"draft_requires_confirmation","title":"今日低强度启动行动草案","actions":[{"name":"基线记录","detail":"记录血压、疲劳程度、颈肩不适和喘息程度。","duration":"3-5分钟","intensity":"无训练负荷"}],"minimumCompletionStandard":"完成基线记录即可。","downgradeRule":"如状态不稳，只做记录，不训练。","stopConditions":["胸闷、头晕、异常心悸","颈部放射痛、麻木或症状加重"],"feedbackFields":["血压","颈肩不适评分","喘息程度"],"exclusions":["不做 HIIT、Tabata 或高强度间歇。","不做颈部负重或颈后动作。"]}}
 """
 
 
@@ -64,11 +80,14 @@ def main() -> None:
     """运行一次首轮规划 smoke，并输出脱敏 AgentRunResult 摘要。"""
     args = _parse_args()
     _load_dotenv_file(PROJECT_ROOT / ".env")
+    _apply_diagnostic_defaults()
     provider_name = _normalize_provider(
         args.provider or os.environ.get("REBOOT_HEALTH_AGENT_PROVIDER") or "mock"
     )
-    debug_log = args.model_debug_log or _env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG")
-    _configure_model_debug_logging(debug_log)
+    debug_log = _model_debug_enabled(args.model_debug_log)
+    _configure_model_debug_logging(
+        debug_log or _env_flag("REBOOT_HEALTH_AGENT_DEBUG_TRACE")
+    )
     try:
         provider = _build_provider(provider_name, debug_log=debug_log)
     except ProviderConfigurationError as exc:
@@ -108,6 +127,11 @@ def main() -> None:
         if args.print_draft_summary
         else _redacted_summary(result_payload)
     )
+    if args.print_trace:
+        summary["trace"] = _redacted_trace(
+            result_payload.get("trace"),
+            source_payload=SAMPLE_PAYLOAD,
+        )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if summary.get("error"):
         raise SystemExit(1)
@@ -127,9 +151,18 @@ def _parse_args() -> argparse.Namespace:
         help="Print a redacted draft summary for manual planning acceptance.",
     )
     parser.add_argument(
+        "--print-trace",
+        action="store_true",
+        help="Print a redacted AgentRun trace to stdout for smoke diagnostics.",
+    )
+    parser.add_argument(
         "--model-debug-log",
         action="store_true",
-        help="Enable redacted OpenAI-compatible provider diagnostic logs.",
+        help=(
+            "Enable redacted OpenAI-compatible provider diagnostic logs. "
+            "Set REBOOT_HEALTH_MODEL_LOG_REQUEST=preview or "
+            "REBOOT_HEALTH_MODEL_LOG_RESPONSE=preview to inspect request/response text."
+        ),
     )
     parser.add_argument(
         "--provider-ping",
@@ -143,6 +176,17 @@ def _parse_args() -> argparse.Namespace:
         help="Use full AgentLoop planning or a minimal provider-only JSON contract.",
     )
     return parser.parse_args()
+
+
+def _apply_diagnostic_defaults() -> tuple[str, ...]:
+    """为诊断开关填充安全默认值，不覆盖 shell 或 .env 中已有配置。"""
+    applied: list[str] = []
+    for key, value in DIAGNOSTIC_DEFAULTS.items():
+        if str(os.environ.get(key) or "").strip():
+            continue
+        os.environ[key] = value
+        applied.append(key)
+    return tuple(applied)
 
 
 def _load_dotenv_file(path: Path) -> tuple[str, ...]:
@@ -169,7 +213,7 @@ def _parse_dotenv_line(raw_line: str) -> tuple[str, str] | None:
     if not line or line.startswith("#"):
         return None
     if line.startswith("export "):
-        line = line[len("export ") :].strip()
+        line = line[len("export "):].strip()
     if "=" not in line:
         return None
 
@@ -298,10 +342,14 @@ def _run_minimal_contract(provider: object, provider_name: str) -> None:
 
     sensitive_texts = _sensitive_texts(SAMPLE_PAYLOAD)
     shape = provider.last_request_shape or {}
+    contract_failures = _minimal_contract_failures(output)
+    contract_ok = not contract_failures
     summary = {
         "provider": provider_name,
-        "status": "ok",
+        "status": "ok" if contract_ok else "failed",
         "contractMode": "minimal",
+        "contractOk": contract_ok,
+        "contractFailures": contract_failures,
         "responseFormat": getattr(provider, "response_format", None),
         "payloadBytes": shape.get("payloadBytes"),
         "outputKeys": sorted(str(key) for key in output.keys()),
@@ -317,9 +365,16 @@ def _run_minimal_contract(provider: object, provider_name: str) -> None:
             sensitive_texts=sensitive_texts,
             max_depth=3,
         ),
-        "error": None,
+        "error": None
+        if contract_ok
+        else {
+            "code": "minimal_contract_failed",
+            "message": "Minimal contract validation failed",
+        },
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if not contract_ok:
+        raise SystemExit(1)
 
 
 def _minimal_contract_payload() -> dict:
@@ -333,11 +388,47 @@ def _minimal_contract_payload() -> dict:
     }
 
 
+def _minimal_contract_failures(output: dict) -> list[str]:
+    """校验 minimal contract 输出，不保存、不修正模型结果。"""
+    failures: list[str] = []
+    if output.get("schemaVersion") != MINIMAL_CONTRACT_SCHEMA_VERSION:
+        failures.append("schemaVersion_must_match_minimal_contract")
+    if output.get("requiresUserConfirmation") is not True:
+        failures.append("requiresUserConfirmation_must_be_true")
+
+    draft = output.get("todayActionDraft")
+    if not isinstance(draft, dict):
+        failures.append("todayActionDraft_must_be_object")
+        return failures
+
+    if draft.get("status") != "draft_requires_confirmation":
+        failures.append("todayActionDraft.status_must_be_draft_requires_confirmation")
+    if not _non_empty_list(draft.get("actions")):
+        failures.append("todayActionDraft.actions_must_be_non_empty_list")
+    if not _non_empty_string(draft.get("minimumCompletionStandard")):
+        failures.append(
+            "todayActionDraft.minimumCompletionStandard_must_be_non_empty_string"
+        )
+    if not _non_empty_list(draft.get("stopConditions")):
+        failures.append("todayActionDraft.stopConditions_must_be_non_empty_list")
+    return failures
+
+
+def _non_empty_list(value: object) -> bool:
+    """判断是否为非空 list。"""
+    return isinstance(value, list) and len(value) > 0
+
+
+def _non_empty_string(value: object) -> bool:
+    """判断是否为非空字符串。"""
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _provider_failure_summary(
-    provider: OpenAICompatibleProvider,
-    provider_name: str,
-    elapsed_ms: int,
-    error: ProviderResponseError,
+        provider: OpenAICompatibleProvider,
+        provider_name: str,
+        elapsed_ms: int,
+        error: ProviderResponseError,
 ) -> dict:
     """输出不含 key/prompt/健康原文的 provider 失败摘要。"""
     shape = provider.last_request_shape or {}
@@ -363,13 +454,20 @@ def _elapsed_ms(started: float) -> int:
 
 
 def _configure_model_debug_logging(enabled: bool) -> None:
-    """开启标准错误输出上的模型诊断日志。"""
+    """开启标准错误输出上的诊断日志。"""
     if not enabled:
         return
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+
+def _model_debug_enabled(cli_enabled: bool) -> bool:
+    """按 CLI > 环境变量 > 默认值 读取 provider shape 级别 debug 开关。"""
+    if cli_enabled:
+        return True
+    return _env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG")
 
 
 def _env_flag(name: str) -> bool:
@@ -409,8 +507,8 @@ def _redacted_summary(result: dict) -> dict:
 
 
 def _redacted_draft_summary(
-    result: dict,
-    source_payload: dict | None = None,
+        result: dict,
+        source_payload: dict | None = None,
 ) -> dict:
     """输出人工验收用脱敏草案摘要，不包含完整 trace 或完整输入原文。"""
     summary = _redacted_summary(result)
@@ -456,6 +554,21 @@ def _redacted_draft_summary(
     return summary
 
 
+def _redacted_trace(
+        trace: object,
+        source_payload: dict | None = None,
+) -> object:
+    """输出脱敏 trace；默认 smoke 摘要不会包含该字段。"""
+    return _redacted_preview(
+        trace,
+        sensitive_texts=_sensitive_texts(source_payload),
+        max_depth=6,
+        max_list_items=30,
+        max_dict_items=30,
+        max_string_length=180,
+    )
+
+
 def _quality_warning_count(warnings: object) -> int:
     """统计质量门禁 warning/error 数量，不输出具体健康内容。"""
     if not isinstance(warnings, list):
@@ -468,8 +581,8 @@ def _quality_warning_count(warnings: object) -> int:
 
 
 def _memory_candidates_preview(
-    candidates: object,
-    sensitive_texts: tuple[str, ...],
+        candidates: object,
+        sensitive_texts: tuple[str, ...],
 ) -> dict:
     """返回 memory candidates 的安全预览，不输出完整候选内容。"""
     if not isinstance(candidates, list):
@@ -500,12 +613,12 @@ def _memory_candidates_preview(
 
 
 def _redacted_preview(
-    value: object,
-    sensitive_texts: tuple[str, ...] = (),
-    max_depth: int = 5,
-    max_list_items: int = 8,
-    max_dict_items: int = 24,
-    max_string_length: int = 180,
+        value: object,
+        sensitive_texts: tuple[str, ...] = (),
+        max_depth: int = 5,
+        max_list_items: int = 8,
+        max_dict_items: int = 24,
+        max_string_length: int = 180,
 ) -> object:
     """递归生成脱敏预览，限制深度、长度和列表规模。"""
     if max_depth < 0:
@@ -617,9 +730,9 @@ def _is_sensitive_key(key: str) -> bool:
         "password",
     }
     return (
-        normalized in sensitive_keys
-        or normalized.endswith("_token")
-        or normalized.endswith("_secret")
+            normalized in sensitive_keys
+            or normalized.endswith("_token")
+            or normalized.endswith("_secret")
     )
 
 

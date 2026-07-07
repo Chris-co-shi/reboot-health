@@ -7,7 +7,11 @@ Domain Kernel 的安全与确认边界。
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -23,6 +27,9 @@ from agent.schemas.planning import (
 )
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 class InitialPlanningSkill:
     """首轮规划 Skill，负责生成 INITIAL_PLANNING v0 草案。"""
 
@@ -31,6 +38,7 @@ class InitialPlanningSkill:
     def __init__(self, provider: BaseModelProvider | None = None) -> None:
         """创建 Skill，并默认使用 MockProvider 保持本地可测。"""
         self.provider = provider or MockProvider()
+        self.last_trace_steps: list[dict[str, Any]] = []
 
     def run(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """执行首轮规划流程。
@@ -38,16 +46,114 @@ class InitialPlanningSkill:
         流程顺序固定为：输入规范化 -> Provider 生成草案 -> 输出规范化 -> 运行时
         安全边界覆盖 -> Schema 校验 -> 禁止业务事实声明检查。
         """
+        self.last_trace_steps = []
         planning_input = PlanningInput.from_mapping(payload)
-        provider_output = self.provider.generate_initial_planning(
-            _load_prompt(),
-            planning_input.to_provider_payload(),
+        provider_payload = planning_input.to_provider_payload()
+        _debug_trace(
+            "skill_input_normalized",
+            providerPayloadKeys=sorted(str(key) for key in provider_payload.keys()),
+            userTextChars=len(planning_input.userText),
         )
+
+        prompt_path = _prompt_path()
+        prompt = prompt_path.read_text(encoding="utf-8")
+        _debug_trace(
+            "skill_prompt_loaded",
+            promptChars=len(prompt),
+            promptPath=str(prompt_path),
+        )
+
+        provider_started = time.monotonic()
+        provider_output = self.provider.generate_initial_planning(
+            prompt,
+            provider_payload,
+        )
+        provider_elapsed_ms = _elapsed_ms(provider_started)
+        provider_meta = _provider_trace_metadata(self.provider)
+        self._record_trace_step(
+            "provider_request_sent",
+            elapsedMs=provider_elapsed_ms,
+            **provider_meta,
+            payloadBytes=_provider_payload_bytes(self.provider, provider_payload),
+        )
+        self._record_trace_step(
+            "provider_response_received",
+            elapsedMs=provider_elapsed_ms,
+            **provider_meta,
+            contentChars=_content_chars(provider_output),
+        )
+        self._record_trace_step(
+            "provider_json_parsed",
+            **provider_meta,
+            topLevelKeys=_top_level_keys(provider_output),
+            fieldTypes=_field_types(provider_output),
+        )
+        _debug_trace(
+            "skill_provider_output_received",
+            topLevelKeys=_top_level_keys(provider_output),
+            fieldTypes=_field_types(provider_output),
+            todayActionDraftType=_field_type(provider_output, "todayActionDraft"),
+        )
+        self._record_trace_step(
+            "skill_provider_output_received",
+            topLevelKeys=_top_level_keys(provider_output),
+            fieldTypes=_field_types(provider_output),
+        )
+
+        today_action_source, today_action_missing_fields = (
+            _today_action_draft_diagnostics(
+                provider_output.get("todayActionDraft")
+                if isinstance(provider_output, Mapping)
+                else None
+            )
+        )
+
         output = PlanningOutput.from_mapping(provider_output).to_dict()
+        _debug_trace(
+            "skill_output_mapped",
+            fieldTypes=_field_types(output),
+        )
+        self._record_trace_step(
+            "skill_output_mapped",
+            topLevelKeys=_top_level_keys(output),
+            fieldTypes=_field_types(output),
+        )
+
         output = self._apply_runtime_boundaries(output, planning_input)
+        _debug_trace(
+            "runtime_boundaries_applied",
+            fieldTypes=_field_types(output),
+            todayActionDraftSource=today_action_source,
+            todayActionDraftMissingFields=today_action_missing_fields,
+        )
+        self._record_trace_step(
+            "runtime_boundaries_applied",
+            fieldTypes=_field_types(output),
+            todayActionDraftSource=today_action_source,
+            todayActionDraftMissingFields=today_action_missing_fields,
+        )
+
         output = validate_planning_output(output)
+        _debug_trace(
+            "skill_schema_validated",
+            fieldTypes=_field_types(output),
+        )
+        self._record_trace_step(
+            "schema_validated",
+            topLevelKeys=_top_level_keys(output),
+            fieldTypes=_field_types(output),
+        )
+
         self._assert_no_forbidden_business_fact_claims(output)
+        _debug_trace(
+            "skill_forbidden_claims_checked",
+            topLevelKeys=_top_level_keys(output),
+        )
         return output
+
+    def _record_trace_step(self, name: str, **fields: Any) -> None:
+        """记录给 AgentLoop 合并进 RunTrace 的结构化摘要。"""
+        self.last_trace_steps.append({"name": name, **fields})
 
     def _apply_runtime_boundaries(
         self,
@@ -100,6 +206,8 @@ class InitialPlanningSkill:
         result["title"] = str(
             result.get("title") or result.get("name") or fallback["title"]
         )
+        if not str(result.get("date") or "").strip():
+            result["date"] = fallback["date"]
         if not _non_empty_list(result.get("actions")):
             result["actions"] = fallback["actions"]
         if not str(result.get("minimumCompletionStandard") or "").strip():
@@ -175,12 +283,137 @@ class InitialPlanningSkill:
 
 def _load_prompt() -> str:
     """读取 INITIAL_PLANNING 的中文 Prompt 资产。"""
+    return _prompt_path().read_text(encoding="utf-8")
+
+
+def _prompt_path() -> Path:
+    """返回 INITIAL_PLANNING Prompt 路径。"""
     project_root = Path(__file__).resolve().parents[2]
     return (
         project_root
         .joinpath("skills", "initial_planning", "prompt.zh-CN.md")
-        .read_text(encoding="utf-8")
     )
+
+
+def _debug_trace(event: str, **fields: Any) -> None:
+    """按环境开关输出 Skill 阶段诊断日志。"""
+    if not _debug_trace_enabled():
+        return
+    payload = {"event": event, **fields}
+    LOGGER.info(
+        "initial_planning_skill %s",
+        json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    )
+
+
+def _debug_trace_enabled() -> bool:
+    """读取 Skill debug trace 开关。"""
+    return str(os.environ.get("REBOOT_HEALTH_AGENT_DEBUG_TRACE") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+        "debug",
+    )
+
+
+def _top_level_keys(value: Any) -> list[str]:
+    """返回顶层字段名。"""
+    if not isinstance(value, Mapping):
+        return []
+    return sorted(str(key) for key in value.keys())
+
+
+def _field_types(value: Any) -> dict[str, str]:
+    """返回顶层字段类型。"""
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): type(item).__name__ for key, item in value.items()}
+
+
+def _field_type(value: Any, key: str) -> str:
+    """返回指定字段类型。"""
+    if not isinstance(value, Mapping):
+        return "NoneType"
+    return type(value.get(key)).__name__
+
+
+def _provider_trace_metadata(provider: BaseModelProvider) -> dict[str, Any]:
+    """返回 Provider 的非敏感 trace 元数据。"""
+    provider_name = getattr(provider, "provider_name", None) or "unknown"
+    model = getattr(provider, "model", None) or provider_name
+    return {
+        "provider": str(provider_name),
+        "model": str(model),
+    }
+
+
+def _provider_payload_bytes(
+    provider: BaseModelProvider,
+    provider_payload: Mapping[str, Any],
+) -> int:
+    """读取 Provider request payload 字节数；没有原生 shape 时用输入摘要估算。"""
+    shape = getattr(provider, "last_request_shape", None)
+    if isinstance(shape, Mapping):
+        payload_bytes = shape.get("payloadBytes")
+        if isinstance(payload_bytes, int):
+            return payload_bytes
+    return len(json.dumps(provider_payload, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _content_chars(value: Any) -> int:
+    """返回 Provider 解析后输出的字符规模摘要。"""
+    return len(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _elapsed_ms(started: float) -> int:
+    """返回耗时毫秒。"""
+    return max(0, int((time.monotonic() - started) * 1000))
+
+
+TODAY_ACTION_REQUIRED_FIELDS = (
+    "status",
+    "title",
+    "date",
+    "actions",
+    "minimumCompletionStandard",
+    "downgradeRule",
+    "stopConditions",
+    "feedbackFields",
+    "exclusions",
+)
+
+
+def _today_action_draft_diagnostics(draft: Any) -> tuple[str, list[str]]:
+    """判断 todayActionDraft 的 provider 原生合同完整度。"""
+    if not isinstance(draft, Mapping):
+        return (
+            "provider_invalid_replaced_by_fallback",
+            list(TODAY_ACTION_REQUIRED_FIELDS),
+        )
+    missing_fields = _today_action_missing_fields(draft)
+    if missing_fields:
+        return (
+            "provider_dict_missing_required_fields_completed_by_fallback",
+            missing_fields,
+        )
+    return "provider_dict_complete", []
+
+
+def _today_action_missing_fields(draft: Mapping[str, Any]) -> list[str]:
+    """返回 provider 原生 todayActionDraft 缺失或不合格字段。"""
+    missing: list[str] = []
+    for field in TODAY_ACTION_REQUIRED_FIELDS:
+        value = draft.get(field)
+        if field == "status":
+            if value != "draft_requires_confirmation":
+                missing.append(field)
+        elif field in ("actions", "stopConditions", "feedbackFields", "exclusions"):
+            if not _non_empty_list(value):
+                missing.append(field)
+        elif not str(value or "").strip():
+            missing.append(field)
+    return missing
 
 
 def _flatten_text(value: Any) -> str:

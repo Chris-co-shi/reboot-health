@@ -151,6 +151,151 @@ class OpenAICompatibleProviderTest(unittest.TestCase):
         self.assertNotIn(user_text, serialized)
         self.assertNotIn("system prompt should not be logged", serialized)
 
+    def test_request_content_log_defaults_to_none(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            debug_log=True,
+            client=client,
+        )
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning(
+                "default-system-prompt-must-not-log",
+                {"userText": "default-user-content-must-not-log"},
+            )
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_request_built", serialized)
+        self.assertIn('"mode": "none"', serialized)
+        self.assertNotIn("systemPromptPreview", serialized)
+        self.assertNotIn("systemPromptRaw", serialized)
+        self.assertNotIn("userContentPreview", serialized)
+        self.assertNotIn("userContentRaw", serialized)
+        self.assertNotIn("default-system-prompt-must-not-log", serialized)
+        self.assertNotIn("default-user-content-must-not-log", serialized)
+
+    def test_request_content_log_preview_is_truncated(self) -> None:
+        secret = _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"]
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_LOG_REQUEST": "preview",
+        }
+        provider = OpenAICompatibleProvider(env=env, debug_log=True, client=client)
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning(
+                f"system-preview-start {secret} " + ("x" * 2100) + " system-after-limit",
+                {"userText": "user-preview-start " + ("y" * 2100) + " user-after-limit"},
+            )
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_request_built", serialized)
+        self.assertIn("systemPromptPreview", serialized)
+        self.assertIn("userContentPreview", serialized)
+        self.assertIn("system-preview-start", serialized)
+        self.assertIn("user-preview-start", serialized)
+        self.assertNotIn("systemPromptRaw", serialized)
+        self.assertNotIn("userContentRaw", serialized)
+        self.assertNotIn("system-after-limit", serialized)
+        self.assertNotIn("user-after-limit", serialized)
+        self.assertNotIn(secret, serialized)
+
+    def test_response_content_log_defaults_to_none(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(_planning_output(True), ensure_ascii=False)
+        )
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            debug_log=True,
+            client=client,
+        )
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_response_raw", serialized)
+        self.assertIn('"mode": "none"', serialized)
+        self.assertNotIn("contentPreview", serialized)
+        self.assertNotIn("contentRaw", serialized)
+
+    def test_response_content_log_preview_is_truncated(self) -> None:
+        secret = _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"]
+        output = _planning_output(True)
+        output["summary"] = f"preview-marker {secret} " + ("x" * 2100) + " after-limit-marker"
+        client = _FakeOpenAISDKClient(content=json.dumps(output, ensure_ascii=False))
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_LOG_RESPONSE": "preview",
+        }
+        provider = OpenAICompatibleProvider(env=env, debug_log=True, client=client)
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_response_raw", serialized)
+        self.assertIn("contentPreview", serialized)
+        self.assertIn("preview-marker", serialized)
+        self.assertNotIn("contentRaw", serialized)
+        self.assertNotIn("after-limit-marker", serialized)
+        self.assertNotIn(secret, serialized)
+
+    def test_response_content_log_raw_prints_full_content(self) -> None:
+        secret = _provider_env()["REBOOT_HEALTH_MODEL_API_KEY"]
+        output = _planning_output(True)
+        output["summary"] = f"raw-start {secret} " + ("x" * 2100) + " raw-end"
+        client = _FakeOpenAISDKClient(content=json.dumps(output, ensure_ascii=False))
+        env = {
+            **_provider_env(),
+            "REBOOT_HEALTH_MODEL_LOG_RESPONSE": "raw",
+        }
+        provider = OpenAICompatibleProvider(env=env, debug_log=True, client=client)
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_response_raw", serialized)
+        self.assertIn("contentRaw", serialized)
+        self.assertIn("raw-start", serialized)
+        self.assertIn("raw-end", serialized)
+        self.assertNotIn("contentPreview", serialized)
+        self.assertNotIn(secret, serialized)
+
+    def test_provider_json_parsed_logs_field_types(self) -> None:
+        client = _FakeOpenAISDKClient(
+            content=json.dumps(
+                {
+                    "schemaVersion": "health-agent.initial-planning.v0",
+                    "summary": "待确认草案。",
+                    "todayActionDraft": "今天只做低强度记录。",
+                    "requiresUserConfirmation": True,
+                },
+                ensure_ascii=False,
+            )
+        )
+        provider = OpenAICompatibleProvider(
+            env=_provider_env(),
+            debug_log=True,
+            client=client,
+        )
+
+        with self.assertLogs("agent.models.openai_compatible", level="INFO") as logs:
+            provider.generate_initial_planning("prompt", {"userText": "想训练"})
+
+        serialized = "\n".join(logs.output)
+        self.assertIn("provider_json_parsed", serialized)
+        self.assertIn("fieldTypes", serialized)
+        self.assertIn('"todayActionDraft": "str"', serialized)
+        self.assertIn('"requiresUserConfirmation": "bool"', serialized)
+
     def test_response_format_json_object_is_included_when_configured(self) -> None:
         client = _FakeOpenAISDKClient(
             content=json.dumps(_planning_output(True), ensure_ascii=False)
