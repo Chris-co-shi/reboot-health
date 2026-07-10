@@ -2,14 +2,18 @@ import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, Mapping
 
 from agent.models import ModelMessage, ModelResponse, ModelToolCall, ProviderResponseError
 from agent.runtime.generic_loop import (
     ERROR_INVALID_RESPONSE,
+    ERROR_MAX_MODEL_TURNS_REACHED,
+    ERROR_MAX_TOOL_CALLS_REACHED,
     ERROR_MODEL_ERROR,
-    ERROR_TOOL_CALL_LOOP_NOT_IMPLEMENTED,
+    ERROR_TIMEOUT_REACHED,
     GENERIC_STATUS_COMPLETED,
     GENERIC_STATUS_INVALID_RESPONSE,
+    GENERIC_STATUS_LIMIT_REACHED,
     GENERIC_STATUS_MODEL_ERROR,
     AgentRequest,
     GenericAgentLoop,
@@ -17,6 +21,13 @@ from agent.runtime.generic_loop import (
 )
 from agent.runtime.result import AgentRunResult
 from agent.runtime.trace import TraceRecorder
+from agent.tools.builtin.convert_weight import (
+    CONVERT_WEIGHT_UNIT_TOOL_NAME,
+    create_convert_weight_unit_tool,
+)
+from agent.tools.contract import ToolDefinition
+from agent.tools.executor import ToolExecutor
+from agent.tools.registry import ToolRegistry
 from tests.support.scripted_model_provider import ScriptedModelProvider
 
 
@@ -67,10 +78,7 @@ class GenericAgentLoopDirectAnswerTest(unittest.TestCase):
         provider = ScriptedModelProvider(
             [ModelResponse(content="这是直接回答。", finish_reason="stop")]
         )
-        result = GenericAgentLoop(
-            provider=provider,
-            now_provider=_fixed_now,
-        ).run(AgentRequest(user_text="请直接回答。"))
+        result = _run(provider)
 
         self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
         self.assertEqual(result.final_text, "这是直接回答。")
@@ -80,29 +88,32 @@ class GenericAgentLoopDirectAnswerTest(unittest.TestCase):
 
     def test_messages_order_and_assistant_message(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
-        result = GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="任务")
-        )
+        result = _run(provider)
 
         self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant"])
         self.assertIsInstance(result.messages[-1], ModelMessage)
         self.assertEqual(result.messages[-1].content, "完成")
+        self.assertEqual(result.messages[-1].tool_calls, ())
 
-    def test_provider_receives_no_tools(self) -> None:
+    def test_empty_registry_sends_no_tools(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
 
-        GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="任务")
-        )
+        _run(provider)
 
         self.assertEqual(provider.calls[0]["tools"], ())
+
+    def test_max_tool_calls_zero_allows_direct_answer(self) -> None:
+        provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
+
+        result = _run(provider, limits=GenericLoopLimits(max_tool_calls=0))
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.tool_calls, 0)
 
     def test_runtime_environment_uses_fixed_datetime_without_today_field(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
 
-        GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="任务", locale="zh-CN")
-        )
+        _run(provider)
 
         system_content = provider.calls[0]["messages"][0].content
         self.assertIn('"currentDate": "2026-01-02"', system_content)
@@ -113,9 +124,7 @@ class GenericAgentLoopDirectAnswerTest(unittest.TestCase):
 
     def test_result_to_dict_serializes_new_fields_without_full_prompt_or_user_text(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
-        result = GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="这是一段用户原文")
-        )
+        result = _run(provider, user_text="这是一段用户原文")
 
         payload = result.to_dict()
         serialized = json.dumps(payload, ensure_ascii=False)
@@ -130,9 +139,7 @@ class GenericAgentLoopDirectAnswerTest(unittest.TestCase):
 
     def test_trace_records_summary_steps(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content="完成", finish_reason="stop")])
-        result = GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="任务")
-        )
+        result = _run(provider)
 
         step_names = [step["name"] for step in result.trace.steps]
         self.assertEqual(
@@ -148,6 +155,373 @@ class GenericAgentLoopDirectAnswerTest(unittest.TestCase):
         self.assertEqual(result.trace.final_outcome, GENERIC_STATUS_COMPLETED)
 
 
+class GenericAgentLoopToolCallTest(unittest.TestCase):
+    def test_single_tool_call_returns_tool_result_then_final_content(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    content=None,
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="190 斤是 95 公斤。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.final_text, "190 斤是 95 公斤。")
+        self.assertEqual(result.model_turns, 2)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant", "tool", "assistant"])
+        self.assertEqual(result.messages[2].tool_calls[0].id, "call-1")
+        self.assertEqual(result.messages[3].tool_call_id, "call-1")
+        self.assertEqual(result.messages[3].name, CONVERT_WEIGHT_UNIT_TOOL_NAME)
+        self.assertEqual(_tool_json(result.messages[3])["data"]["convertedValue"], 95)
+        self.assertEqual([message.role for message in provider.calls[1]["messages"]], ["system", "user", "assistant", "tool"])
+
+    def test_multiple_tool_calls_execute_in_order_before_next_model_turn(self) -> None:
+        first = _convert_tool_call(
+            {"value": 190, "fromUnit": "jin", "toUnit": "kg"},
+            id="call-first",
+        )
+        second = _convert_tool_call(
+            {"value": 100, "fromUnit": "lb", "toUnit": "kg"},
+            id="call-second",
+        )
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(tool_calls=(first, second), finish_reason="tool_calls"),
+                ModelResponse(content="两个结果都已计算。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.tool_calls, 2)
+        self.assertEqual(
+            [message.role for message in result.messages],
+            ["system", "user", "assistant", "tool", "tool", "assistant"],
+        )
+        self.assertEqual([result.messages[3].tool_call_id, result.messages[4].tool_call_id], ["call-first", "call-second"])
+        self.assertEqual([message.role for message in provider.calls[1]["messages"]], ["system", "user", "assistant", "tool", "tool"])
+
+    def test_content_and_tool_calls_are_preserved_without_early_completion(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    content="我先使用工具计算。",
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="最终答案是 95 公斤。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.final_text, "最终答案是 95 公斤。")
+        self.assertEqual(result.messages[2].content, "我先使用工具计算。")
+        self.assertEqual(len(result.messages[2].tool_calls), 1)
+
+    def test_provider_receives_model_tool_definitions_on_every_turn(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    )
+                ),
+                ModelResponse(content="完成", finish_reason="stop"),
+            ]
+        )
+
+        _run(provider, registry=_convert_registry())
+
+        self.assertEqual(len(provider.calls), 2)
+        for call in provider.calls:
+            tools = call["tools"]
+            self.assertEqual([tool.name for tool in tools], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
+            self.assertFalse(hasattr(tools[0], "handler"))
+            self.assertFalse(hasattr(tools[0], "argument_validator"))
+            self.assertFalse(hasattr(tools[0], "permission"))
+            self.assertFalse(hasattr(tools[0], "side_effect"))
+
+    def test_tool_executor_registry_mismatch_is_rejected(self) -> None:
+        registry = _convert_registry()
+        other_registry = ToolRegistry()
+        executor = ToolExecutor(other_registry)
+
+        with self.assertRaises(ValueError):
+            GenericAgentLoop(
+                provider=ScriptedModelProvider([ModelResponse(content="完成")]),
+                tool_registry=registry,
+                tool_executor=executor,
+            )
+
+
+class GenericAgentLoopToolErrorTest(unittest.TestCase):
+    def test_unknown_tool_error_is_returned_to_model(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(
+                            id="missing-call",
+                            name="missing_tool",
+                            arguments={"value": 1},
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="工具不存在，我已说明限制。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertIsNone(result.error)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(result.messages[3].role, "tool")
+        self.assertEqual(_tool_json(result.messages[3])["error"]["code"], "unknown_tool")
+
+    def test_invalid_arguments_error_is_returned_to_model(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": "190", "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="参数格式不合法。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertIsNone(result.error)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(_tool_json(result.messages[3])["error"]["code"], "invalid_arguments")
+
+    def test_tool_execution_failed_error_is_returned_to_model_without_traceback(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(
+                            id="fail-call",
+                            name="failing_tool",
+                            arguments={"value": 1},
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="工具执行失败。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_failing_registry())
+
+        content = result.messages[3].content
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual(_tool_json(result.messages[3])["error"]["code"], "tool_execution_failed")
+        self.assertNotIn("Traceback", content)
+        self.assertNotIn("/Users/", content)
+
+    def test_model_can_correct_unknown_tool_then_finish(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(
+                            id="missing-call",
+                            name="missing_tool",
+                            arguments={"value": 1},
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"},
+                            id="corrected-call",
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="纠正后结果是 95 公斤。", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_COMPLETED)
+        self.assertEqual(result.model_turns, 3)
+        self.assertEqual(result.tool_calls, 2)
+        self.assertEqual(_tool_json(result.messages[3])["error"]["code"], "unknown_tool")
+        self.assertEqual(_tool_json(result.messages[5])["data"]["convertedValue"], 95)
+        self.assertEqual(
+            [message.role for message in result.messages],
+            ["system", "user", "assistant", "tool", "assistant", "tool", "assistant"],
+        )
+
+
+class GenericAgentLoopLimitTest(unittest.TestCase):
+    def test_max_tool_calls_zero_rejects_batch_without_execution(self) -> None:
+        calls = {"count": 0}
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(id="count-call", name="count_tool", arguments={"value": 1}),
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        )
+
+        result = _run(
+            provider,
+            registry=_counting_registry(calls),
+            limits=GenericLoopLimits(max_tool_calls=0),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_MAX_TOOL_CALLS_REACHED)
+        self.assertEqual(result.tool_calls, 0)
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant"])
+
+    def test_batch_exceeding_remaining_tool_limit_is_rejected_as_a_whole(self) -> None:
+        calls = {"count": 0}
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(id="count-1", name="count_tool", arguments={"value": 1}),
+                        _tool_call(id="count-2", name="count_tool", arguments={"value": 2}),
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        )
+
+        result = _run(
+            provider,
+            registry=_counting_registry(calls),
+            limits=GenericLoopLimits(max_tool_calls=1),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_MAX_TOOL_CALLS_REACHED)
+        self.assertEqual(result.tool_calls, 0)
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant"])
+
+    def test_max_model_turns_one_does_not_execute_unreturnable_tool_result(self) -> None:
+        calls = {"count": 0}
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _tool_call(id="count-call", name="count_tool", arguments={"value": 1}),
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        )
+
+        result = _run(
+            provider,
+            registry=_counting_registry(calls),
+            limits=GenericLoopLimits(max_model_turns=1),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_MAX_MODEL_TURNS_REACHED)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.tool_calls, 0)
+        self.assertEqual(calls["count"], 0)
+        self.assertEqual(len(provider.calls), 1)
+
+    def test_timeout_before_first_provider_call(self) -> None:
+        provider = ScriptedModelProvider([ModelResponse(content="不会调用")])
+
+        result = _run(
+            provider,
+            limits=GenericLoopLimits(timeout_seconds=1),
+            monotonic_provider=ControlledClock([0, 2]),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_TIMEOUT_REACHED)
+        self.assertEqual(result.model_turns, 0)
+        self.assertEqual(len(provider.calls), 0)
+
+    def test_timeout_after_provider_response_keeps_assistant_message(self) -> None:
+        provider = ScriptedModelProvider([ModelResponse(content="太晚了", finish_reason="stop")])
+
+        result = _run(
+            provider,
+            limits=GenericLoopLimits(timeout_seconds=1),
+            monotonic_provider=ControlledClock([0, 0, 2]),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_TIMEOUT_REACHED)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant"])
+
+    def test_timeout_after_tool_execution_keeps_tool_result(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="不会调用", finish_reason="stop"),
+            ]
+        )
+
+        result = _run(
+            provider,
+            registry=_convert_registry(),
+            limits=GenericLoopLimits(timeout_seconds=1),
+            monotonic_provider=ControlledClock([0, 0, 0, 0, 0, 2]),
+        )
+
+        self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
+        self.assertEqual(result.error.code, ERROR_TIMEOUT_REACHED)
+        self.assertEqual(result.model_turns, 1)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant", "tool"])
+        self.assertEqual(len(provider.calls), 1)
+
+
 class GenericAgentLoopErrorPathTest(unittest.TestCase):
     def test_provider_error_returns_model_error(self) -> None:
         provider = ScriptedModelProvider(
@@ -160,9 +534,7 @@ class GenericAgentLoopErrorPathTest(unittest.TestCase):
             ]
         )
 
-        result = GenericAgentLoop(provider=provider, now_provider=_fixed_now).run(
-            AgentRequest(user_text="任务")
-        )
+        result = _run(provider)
 
         self.assertEqual(result.status, GENERIC_STATUS_MODEL_ERROR)
         self.assertEqual(result.final_text, None)
@@ -171,49 +543,68 @@ class GenericAgentLoopErrorPathTest(unittest.TestCase):
         self.assertEqual(result.error.code, ERROR_MODEL_ERROR)
         self.assertEqual(result.error.message, "provider failed safely")
 
+    def test_provider_error_after_tool_result_preserves_counts_and_messages(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ProviderResponseError(
+                    "raw second turn failure",
+                    code="provider_failed",
+                    safe_summary="second turn failed safely",
+                ),
+            ]
+        )
+
+        result = _run(provider, registry=_convert_registry())
+
+        self.assertEqual(result.status, GENERIC_STATUS_MODEL_ERROR)
+        self.assertEqual(result.error.code, ERROR_MODEL_ERROR)
+        self.assertEqual(result.model_turns, 2)
+        self.assertEqual(result.tool_calls, 1)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant", "tool"])
+
     def test_none_content_returns_invalid_response(self) -> None:
-        result = GenericAgentLoop(
-            provider=ScriptedModelProvider([ModelResponse(content=None, finish_reason="stop")]),
-            now_provider=_fixed_now,
-        ).run(AgentRequest(user_text="任务"))
+        result = _run(ScriptedModelProvider([ModelResponse(content=None, finish_reason="stop")]))
 
         self.assertEqual(result.status, GENERIC_STATUS_INVALID_RESPONSE)
         self.assertEqual(result.error.code, ERROR_INVALID_RESPONSE)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant"])
 
     def test_blank_content_returns_invalid_response(self) -> None:
-        result = GenericAgentLoop(
-            provider=ScriptedModelProvider([ModelResponse(content="   ", finish_reason="stop")]),
-            now_provider=_fixed_now,
-        ).run(AgentRequest(user_text="任务"))
+        result = _run(ScriptedModelProvider([ModelResponse(content="   ", finish_reason="stop")]))
 
         self.assertEqual(result.status, GENERIC_STATUS_INVALID_RESPONSE)
         self.assertEqual(result.error.code, ERROR_INVALID_RESPONSE)
 
-    def test_tool_call_returns_temporary_not_implemented_error(self) -> None:
-        tool_call = ModelToolCall(
-            id="call-1",
-            name="convert_weight_unit",
-            raw_arguments='{"value":190}',
-            arguments={"value": 190},
+    def test_empty_content_after_tool_result_returns_invalid_response(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    tool_calls=(
+                        _convert_tool_call(
+                            {"value": 190, "fromUnit": "jin", "toUnit": "kg"}
+                        ),
+                    ),
+                    finish_reason="tool_calls",
+                ),
+                ModelResponse(content="   ", finish_reason="stop"),
+            ]
         )
-        result = GenericAgentLoop(
-            provider=ScriptedModelProvider(
-                [ModelResponse(content=None, tool_calls=(tool_call,), finish_reason="tool_calls")]
-            ),
-            now_provider=_fixed_now,
-        ).run(AgentRequest(user_text="任务"))
+
+        result = _run(provider, registry=_convert_registry())
 
         self.assertEqual(result.status, GENERIC_STATUS_INVALID_RESPONSE)
-        self.assertEqual(result.error.code, ERROR_TOOL_CALL_LOOP_NOT_IMPLEMENTED)
+        self.assertEqual(result.error.code, ERROR_INVALID_RESPONSE)
+        self.assertEqual(result.model_turns, 2)
         self.assertEqual(result.tool_calls, 1)
-        self.assertEqual(result.model_turns, 1)
-        self.assertEqual([message.role for message in result.messages], ["system", "user"])
-
-    def test_tool_call_path_does_not_execute_tool_runtime(self) -> None:
-        source = _generic_loop_source()
-
-        self.assertNotIn("ToolExecutor", source)
-        self.assertNotIn("ToolRegistry", source)
+        self.assertEqual([message.role for message in result.messages], ["system", "user", "assistant", "tool", "assistant"])
 
 
 class GenericAgentLoopIsolationTest(unittest.TestCase):
@@ -262,8 +653,93 @@ class AgentRunResultCompatibilityTest(unittest.TestCase):
         self.assertIsNone(payload["finishReason"])
 
 
+class ControlledClock:
+    def __init__(self, values: list[float]) -> None:
+        self._values = list(values)
+        self._last = values[-1] if values else 0.0
+
+    def __call__(self) -> float:
+        if self._values:
+            self._last = self._values.pop(0)
+        return self._last
+
+
+def _run(
+    provider: ScriptedModelProvider,
+    user_text: str = "任务",
+    registry: ToolRegistry | None = None,
+    limits: GenericLoopLimits | None = None,
+    monotonic_provider=None,
+) -> AgentRunResult:
+    return GenericAgentLoop(
+        provider=provider,
+        limits=limits,
+        now_provider=_fixed_now,
+        tool_registry=registry,
+        monotonic_provider=monotonic_provider,
+    ).run(AgentRequest(user_text=user_text, locale="zh-CN"))
+
+
 def _fixed_now() -> datetime:
     return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone(timedelta(hours=8)))
+
+
+def _convert_registry() -> ToolRegistry:
+    return ToolRegistry([create_convert_weight_unit_tool()])
+
+
+def _convert_tool_call(arguments: Mapping[str, Any], id: str = "call-1") -> ModelToolCall:
+    return _tool_call(
+        id=id,
+        name=CONVERT_WEIGHT_UNIT_TOOL_NAME,
+        arguments=arguments,
+    )
+
+
+def _tool_call(id: str, name: str, arguments: Mapping[str, Any]) -> ModelToolCall:
+    return ModelToolCall(
+        id=id,
+        name=name,
+        raw_arguments=json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+        arguments=arguments,
+    )
+
+
+def _tool_json(message: ModelMessage) -> dict[str, Any]:
+    return json.loads(message.content or "")
+
+
+def _counting_registry(calls: dict[str, int]) -> ToolRegistry:
+    def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        calls["count"] += 1
+        return {"value": arguments["value"]}
+
+    return ToolRegistry(
+        [
+            ToolDefinition(
+                name="count_tool",
+                description="Count calls",
+                input_schema={"type": "object", "properties": {"value": {"type": "number"}}},
+                handler=handler,
+            )
+        ]
+    )
+
+
+def _failing_registry() -> ToolRegistry:
+    def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+        raise RuntimeError("Traceback /Users/sxc/private.py")
+
+    return ToolRegistry(
+        [
+            ToolDefinition(
+                name="failing_tool",
+                description="Always fail",
+                input_schema={"type": "object", "properties": {"value": {"type": "number"}}},
+                handler=handler,
+            )
+        ]
+    )
 
 
 def _generic_loop_source() -> str:

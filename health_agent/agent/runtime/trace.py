@@ -33,6 +33,9 @@ TRACE_STEP_ALLOWED_FIELDS = {
     "finishReason",
     "errorCode",
     "finalStatus",
+    "toolName",
+    "success",
+    "limitType",
 }
 
 
