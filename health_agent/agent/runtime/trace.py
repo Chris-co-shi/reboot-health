@@ -28,6 +28,11 @@ TRACE_STEP_ALLOWED_FIELDS = {
     "selectedSkill",
     "step",
     "memoryCandidateCount",
+    "modelTurns",
+    "toolCallCount",
+    "finishReason",
+    "errorCode",
+    "finalStatus",
 }
 
 

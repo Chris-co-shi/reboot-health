@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from agent.memory.candidate import MemoryCandidate
+from agent.models import ModelMessage
 from agent.runtime.trace import RunTrace
 from agent.schemas.agent import AGENT_RUN_SCHEMA_VERSION
 
@@ -45,6 +46,11 @@ class AgentRunResult:
     quality_findings: tuple[Mapping[str, Any], ...] = ()
     error: AgentRunError | None = None
     schema_version: str = AGENT_RUN_SCHEMA_VERSION
+    final_text: str | None = None
+    messages: tuple[ModelMessage, ...] = ()
+    model_turns: int = 0
+    tool_calls: int = 0
+    finish_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """返回 API 友好的 camelCase 结构。"""
@@ -65,4 +71,27 @@ class AgentRunResult:
                 dict(finding) for finding in self.quality_findings
             ],
             "error": self.error.to_dict() if self.error else None,
+            "finalText": self.final_text,
+            "messages": [_message_summary(message) for message in self.messages],
+            "modelTurns": self.model_turns,
+            "toolCalls": self.tool_calls,
+            "finishReason": self.finish_reason,
         }
+
+
+def _message_summary(message: ModelMessage) -> dict[str, Any]:
+    """返回可序列化消息摘要，不暴露完整 prompt 或用户原文。"""
+    content = message.content or ""
+    result: dict[str, Any] = {
+        "role": message.role,
+        "hasContent": bool(content),
+        "contentChars": len(content),
+    }
+    if message.name:
+        result["name"] = message.name
+    if message.tool_call_id:
+        result["toolCallId"] = message.tool_call_id
+    tool_calls = getattr(message, "tool_calls", ())
+    if tool_calls:
+        result["toolCallCount"] = len(tool_calls)
+    return result
