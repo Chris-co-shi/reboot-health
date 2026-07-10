@@ -1,6 +1,6 @@
 """运行状态定义。
 
-状态只用于描述 Python Runtime 内部进度，不代表 Java Domain Kernel 中的业务事实。
+状态只用于描述 Python Runtime 内部进度，不代表已确认业务事实。
 """
 
 from __future__ import annotations

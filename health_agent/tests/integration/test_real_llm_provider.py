@@ -1,13 +1,27 @@
 import os
+import sys
 import unittest
 
 from agent.config import LLM_API_KEY_ENV, LLMSettings, should_run_llm_integration
 from agent.models import ModelMessage, ModelOptions, ModelResponse, OpenAICompatibleProvider
 
 
+def _is_explicit_integration_target() -> bool:
+    return any(
+        arg in ("tests.integration.test_real_llm_provider", "integration.test_real_llm_provider")
+        for arg in sys.argv
+    )
+
+
+def _has_explicit_llm_config() -> bool:
+    if not _is_explicit_integration_target():
+        return False
+    return should_run_llm_integration(load_dotenv_file=True)
+
+
 @unittest.skipUnless(
-    should_run_llm_integration(),
-    "RUN_LLM_INTEGRATION=1 and LLM environment variables are required",
+    _has_explicit_llm_config(),
+    "explicit RUN_LLM_INTEGRATION=1 and LLM environment variables are required",
 )
 class RealLLMProviderIntegrationTest(unittest.TestCase):
     def test_real_provider_returns_non_empty_plain_text_without_logging_api_key(self) -> None:

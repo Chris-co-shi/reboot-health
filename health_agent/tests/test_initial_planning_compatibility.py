@@ -58,6 +58,62 @@ class InitialPlanningCompatibilityTest(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "invalid_json")
 
+    def test_unknown_health_facts_are_not_injected_by_runtime_boundaries(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    content=json.dumps(_insufficient_output(), ensure_ascii=False)
+                )
+            ]
+        )
+        skill = InitialPlanningSkill(provider=provider)
+
+        result = skill.run({"userText": "我想恢复训练，从低强度开始。"})
+
+        flattened = json.dumps(result, ensure_ascii=False)
+        for forbidden in (
+            "颈椎",
+            "血压",
+            "游泳",
+            "呛水",
+            "心脏",
+            "颈后下拉",
+            "颈后推举",
+        ):
+            self.assertNotIn(forbidden, flattened)
+
+    def test_insufficient_information_status_passes_without_filled_plan(self) -> None:
+        provider = ScriptedModelProvider(
+            [
+                ModelResponse(
+                    content=json.dumps(_insufficient_output(), ensure_ascii=False)
+                )
+            ]
+        )
+        skill = InitialPlanningSkill(provider=provider)
+
+        result = skill.run({"userText": "想恢复训练"})
+
+        self.assertEqual(result["programDraft"]["status"], "insufficient_information")
+        self.assertEqual(result["phaseDraft"]["status"], "insufficient_information")
+        self.assertEqual(result["weeklyPlanDraft"]["days"], [])
+        self.assertEqual(result["todayActionDraft"]["actions"], [])
+
+    def test_missing_today_action_actions_are_not_completed_by_business_fallback(self) -> None:
+        output = _insufficient_output()
+        output["todayActionDraft"] = {"status": "insufficient_information"}
+        provider = ScriptedModelProvider(
+            [ModelResponse(content=json.dumps(output, ensure_ascii=False))]
+        )
+        skill = InitialPlanningSkill(provider=provider)
+
+        result = skill.run({"userText": "想恢复训练"})
+
+        self.assertEqual(result["todayActionDraft"]["actions"], [])
+        flattened = json.dumps(result["todayActionDraft"], ensure_ascii=False)
+        for forbidden in ("步行", "游泳", "骑行", "拉伸", "血压记录"):
+            self.assertNotIn(forbidden, flattened)
+
 
 def _planning_output() -> dict:
     return {
@@ -84,6 +140,28 @@ def _planning_output() -> dict:
         },
         "safetyNotes": [],
         "questions": [],
+        "requiresUserConfirmation": True,
+    }
+
+
+def _insufficient_output() -> dict:
+    return {
+        "schemaVersion": "health-agent.initial-planning.v0",
+        "summary": "信息不足，需要先确认偏好和目标。",
+        "understandingCandidates": [],
+        "healthConstraintCandidates": [],
+        "goalCandidates": [],
+        "programDraft": {"status": "insufficient_information"},
+        "phaseDraft": {"status": "insufficient_information"},
+        "weeklyPlanDraft": {"status": "insufficient_information", "days": []},
+        "todayActionDraft": {"status": "insufficient_information", "actions": []},
+        "safetyNotes": [],
+        "questions": [
+            {
+                "field": "goals",
+                "question": "您希望通过恢复训练实现什么目标？",
+            }
+        ],
         "requiresUserConfirmation": True,
     }
 

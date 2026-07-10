@@ -1,7 +1,7 @@
 """INITIAL_PLANNING 输出质量门禁。
 
 门禁只做内容级保守校验：发现过激、越权或不可执行的草案时生成 warning/error。
-它不保存事实、不调用外部资源，也不替代后续 Java 侧安全规则。
+它不保存事实、不调用外部资源，也不替代后续确定性安全规则。
 """
 
 from __future__ import annotations

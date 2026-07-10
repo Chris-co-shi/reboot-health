@@ -1,7 +1,7 @@
 """INITIAL_PLANNING v0 的输入输出 Schema 与轻量校验。
 
 这里的对象是 Python Agent 与 Provider/Skill 之间的稳定边界。它们只描述候选、
-草案和需要确认的信息，不代表已经写入 Java Domain Kernel 的确认事实。
+草案和需要确认的信息，不代表已经写入已确认健康事实。
 """
 
 from __future__ import annotations
@@ -12,6 +12,12 @@ from typing import Any, Mapping
 
 # 当前单技能输出合同版本。修改字段时必须同步更新测试和调用方合同。
 PLANNING_SCHEMA_VERSION = "health-agent.initial-planning.v0"
+DRAFT_STATUS_DRAFT_REQUIRES_CONFIRMATION = "draft_requires_confirmation"
+DRAFT_STATUS_INSUFFICIENT_INFORMATION = "insufficient_information"
+ALLOWED_DRAFT_STATUSES = (
+    DRAFT_STATUS_DRAFT_REQUIRES_CONFIRMATION,
+    DRAFT_STATUS_INSUFFICIENT_INFORMATION,
+)
 
 # Provider 返回的 INITIAL_PLANNING 结果必须包含这些顶层字段。
 REQUIRED_PLANNING_OUTPUT_KEYS = (
@@ -35,6 +41,39 @@ class SchemaValidationError(ValueError):
 
 
 @dataclass(frozen=True)
+class PlanningQuestion:
+    """模型需要向用户追问的结构化问题。"""
+
+    field: str
+    question: str
+    reason: str | None = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any], index: int) -> "PlanningQuestion":
+        """从 JSON object 构建问题对象。"""
+        field_value = str(value.get("field") or "").strip()
+        question_value = str(value.get("question") or "").strip()
+        reason_value = _optional_string(value.get("reason"))
+        if not field_value:
+            raise SchemaValidationError(f"questions[{index}].field must be a non-empty string")
+        if not question_value:
+            raise SchemaValidationError(
+                f"questions[{index}].question must be a non-empty string"
+            )
+        return cls(field=field_value, question=question_value, reason=reason_value)
+
+    def to_dict(self) -> dict[str, Any]:
+        """返回 JSON-serializable dict。"""
+        data: dict[str, Any] = {
+            "field": self.field,
+            "question": self.question,
+        }
+        if self.reason:
+            data["reason"] = self.reason
+        return data
+
+
+@dataclass(frozen=True)
 class PlanningInput:
     """INITIAL_PLANNING Skill 的规范化输入。
 
@@ -50,6 +89,7 @@ class PlanningInput:
     preferences: dict[str, Any] = field(default_factory=dict)
     today: str | None = None
     locale: str = "zh-CN"
+    runtimeEnvironment: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any] | None) -> "PlanningInput":
@@ -91,6 +131,7 @@ class PlanningInput:
             ),
             today=_optional_string(_first_present(data, "today", "date", default=None)),
             locale=str(data.get("locale") or "zh-CN"),
+            runtimeEnvironment=_as_mapping(data.get("runtimeEnvironment")),
         )
 
     def to_provider_payload(self) -> dict[str, Any]:
@@ -104,6 +145,7 @@ class PlanningInput:
             "preferences": self.preferences,
             "today": self.today,
             "locale": self.locale,
+            "runtimeEnvironment": self.runtimeEnvironment,
         }
 
 
@@ -124,7 +166,7 @@ class PlanningOutput:
     weeklyPlanDraft: dict[str, Any] = field(default_factory=dict)
     todayActionDraft: dict[str, Any] = field(default_factory=dict)
     safetyNotes: list[str] = field(default_factory=list)
-    questions: list[str] = field(default_factory=list)
+    questions: tuple[PlanningQuestion, ...] = ()
     requiresUserConfirmation: bool = True
     schemaVersion: str = PLANNING_SCHEMA_VERSION
 
@@ -150,7 +192,7 @@ class PlanningOutput:
             weeklyPlanDraft=_as_mapping(data.get("weeklyPlanDraft")),
             todayActionDraft=_as_mapping(data.get("todayActionDraft")),
             safetyNotes=[str(item) for item in _as_list(data.get("safetyNotes"))],
-            questions=[str(item) for item in _as_list(data.get("questions"))],
+            questions=_as_questions(data.get("questions")),
             requiresUserConfirmation=bool(
                 data.get("requiresUserConfirmation", True)
             ),
@@ -169,7 +211,7 @@ class PlanningOutput:
             "weeklyPlanDraft": self.weeklyPlanDraft,
             "todayActionDraft": self.todayActionDraft,
             "safetyNotes": self.safetyNotes,
-            "questions": self.questions,
+            "questions": [question.to_dict() for question in self.questions],
             "requiresUserConfirmation": self.requiresUserConfirmation,
         }
 
@@ -178,7 +220,7 @@ def validate_planning_output(value: Mapping[str, Any]) -> dict[str, Any]:
     """校验 INITIAL_PLANNING 输出合同。
 
     本函数只做结构和关键安全边界校验：字段完整、版本匹配、必须等待用户确认，
-    以及候选/草案字段类型正确。更复杂的领域规则由 Java 侧权威执行。
+    以及候选/草案字段类型正确。
     """
     data = dict(value)
     missing = [key for key in REQUIRED_PLANNING_OUTPUT_KEYS if key not in data]
@@ -198,14 +240,36 @@ def validate_planning_output(value: Mapping[str, Any]) -> dict[str, Any]:
         "healthConstraintCandidates",
         "goalCandidates",
         "safetyNotes",
-        "questions",
     ):
         if not isinstance(data[key], list):
             raise SchemaValidationError(f"Planning output field must be a list: {key}")
 
+    if not isinstance(data["questions"], list):
+        raise SchemaValidationError("Planning output field must be a list: questions")
+    for index, question in enumerate(data["questions"]):
+        if not isinstance(question, Mapping):
+            type_name = "string" if isinstance(question, str) else type(question).__name__
+            raise SchemaValidationError(
+                f"questions[{index}] must be an object, got {type_name}"
+            )
+        PlanningQuestion.from_mapping(question, index)
+
     for key in ("programDraft", "phaseDraft", "weeklyPlanDraft", "todayActionDraft"):
         if not isinstance(data[key], dict):
             raise SchemaValidationError(f"Planning output field must be an object: {key}")
+        status = data[key].get("status")
+        if status not in ALLOWED_DRAFT_STATUSES:
+            raise SchemaValidationError(
+                f"{key}.status must be draft_requires_confirmation or insufficient_information"
+            )
+
+    weekly_days = data["weeklyPlanDraft"].get("days")
+    if weekly_days is not None and not isinstance(weekly_days, list):
+        raise SchemaValidationError("weeklyPlanDraft.days must be a list")
+
+    today_actions = data["todayActionDraft"].get("actions")
+    if today_actions is not None and not isinstance(today_actions, list):
+        raise SchemaValidationError("todayActionDraft.actions must be a list")
 
     return data
 
@@ -245,6 +309,19 @@ def _as_list_of_mappings(value: Any) -> list[dict[str, Any]]:
         else:
             result.append({"text": str(item), "candidate": True})
     return result
+
+
+def _as_questions(value: Any) -> tuple[PlanningQuestion, ...]:
+    """把 Provider 输出校验为结构化问题数组。"""
+    result: list[PlanningQuestion] = []
+    for index, item in enumerate(_as_list(value)):
+        if not isinstance(item, Mapping):
+            type_name = "string" if isinstance(item, str) else type(item).__name__
+            raise SchemaValidationError(
+                f"questions[{index}] must be an object, got {type_name}"
+            )
+        result.append(PlanningQuestion.from_mapping(item, index))
+    return tuple(result)
 
 
 def _optional_string(value: Any) -> str | None:

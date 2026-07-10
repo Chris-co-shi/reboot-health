@@ -48,7 +48,7 @@ health_agent/
 | INITIAL_PLANNING | 兼容中 | 旧业务入口保留，Provider 不再解析 PlanningOutput。 |
 | Tool Call Loop | 未实现 | 当前只完成模型 Tool Call 数据结构和 Provider 转换。 |
 | Persistence / API Server | 未实现 | 不接 FastAPI、数据库、Redis 或消息队列。 |
-| Java/Python HTTP 链路 | 不可用 | 历史链路仍在仓库中，本阶段不修复。 |
+| 历史 HTTP 链路 | 不可用 | 旧跨运行时链路仍在仓库中，本阶段不修复。 |
 
 ## 配置
 

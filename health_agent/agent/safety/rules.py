@@ -1,7 +1,7 @@
 """Planning Quality Gate 的规则常量。
 
-这些规则是保守关键词门禁，不替代 Java Domain Kernel 的确定性安全规则，也不把
-AI 输出升级为已确认健康事实。
+这些规则是保守关键词门禁，不替代确定性安全规则，也不把 AI 输出升级为已确认
+健康事实。
 """
 
 from __future__ import annotations

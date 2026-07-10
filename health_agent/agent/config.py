@@ -70,14 +70,26 @@ def default_dotenv_path() -> Path:
     return Path(__file__).resolve().parents[1] / ".env"
 
 
+def load_llm_environment(dotenv_path: Path | None = None) -> None:
+    """Load the canonical dotenv file without overriding shell values."""
+    load_dotenv(dotenv_path=dotenv_path or default_dotenv_path(), override=False)
+
+
 def load_llm_settings_from_env(dotenv_path: Path | None = None) -> LLMSettings:
     """Load the canonical dotenv file, then read validated LLM settings."""
-    load_dotenv(dotenv_path=dotenv_path or default_dotenv_path(), override=False)
+    load_llm_environment(dotenv_path=dotenv_path)
     return LLMSettings.from_mapping(os.environ)
 
 
-def should_run_llm_integration(source: Mapping[str, str] | None = None) -> bool:
+def should_run_llm_integration(
+    source: Mapping[str, str] | None = None,
+    *,
+    dotenv_path: Path | None = None,
+    load_dotenv_file: bool = False,
+) -> bool:
     """Return whether real LLM integration tests are explicitly enabled."""
+    if source is None and load_dotenv_file:
+        load_llm_environment(dotenv_path=dotenv_path)
     values = os.environ if source is None else source
     enabled = str(values.get(RUN_LLM_INTEGRATION_ENV) or "").strip().lower()
     if enabled not in _TRUE_VALUES:
