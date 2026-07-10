@@ -1,304 +1,323 @@
 # MVP 执行计划
 
-本文档是唯一里程碑状态来源。每个里程碑完成后必须更新状态、验收结果、测试结果和下一步。
+本文档是当前里程碑、状态、验收结果和下一步的唯一事实来源。
+
+历史 Java/Flutter 多运行时里程碑不再作为当前开发路线；相关代码和 ADR 仍保留为 legacy 与迁移参考。
 
 ## 1. 状态约定
 
-- `TODO`：未开始。
-- `IN_PROGRESS`：进行中。
-- `CODE_ACCEPTED`：自动化代码验收通过，等待用户页面人工验收。
-- `DONE`：用户验收通过。
-- `BLOCKED`：被未确认事项或外部条件阻塞。
+| 状态 | 含义 |
+|---|---|
+| `DONE` | 自动化验证和要求的真实运行验收均完成 |
+| `READY` | 设计、范围和验收标准已确认，可以开始实现 |
+| `IN_PROGRESS` | 正在实施，尚未完成全部验收 |
+| `IMPLEMENTED_WITH_BLOCKERS` | 主体代码存在，但真实环境或关键验收仍被阻塞 |
+| `TODO` | 尚未进入实施 |
+| `BLOCKED` | 存在必须先解决的依赖或决策 |
+
+不得把仅存在代码、只通过 Mock、只通过静态分析或未运行真实链路的能力标记为 `DONE`。
 
 ## 2. 当前总状态
 
-- 当前阶段：M2.5-A。
-- 当前目标：Flutter 主客户端骨架、AgentRun 技术链路、Python Agent Runtime Model Mock、设备 bootstrap/配对/凭据和安全审计。
-- 当前业务状态：M2A、M2B 已完成功能验收；M2.5-A 实施后等待用户技术链路人工验收。
-- 下一阶段：M2.5-B AI 首次规划闭环。
+```text
+当前架构：Python-first 模块化单体
+当前真实目录：health_agent/
+当前已完成：Phase 1、1.1、1.2、1.3
+当前待实施：Phase 2A 通用只读 Tool Call Agent Loop
+下一步：依据 docs/implementation/phase-2a-read-only-tool-call-loop.md 实施
+```
 
-## 3. 里程碑
+当前产品链路仍是：
 
-### M1 文档和工程骨架
+```text
+真实 LLM
+→ INITIAL_PLANNING 兼容入口
+→ 结构化 PlanningOutput
+```
 
-状态：DONE
+Phase 2A 完成后目标链路为：
 
-范围：
+```text
+用户输入
+→ 通用 AgentLoop
+→ 真实 LLM
+→ 可选只读 Tool Call
+→ Tool Result
+→ 真实 LLM
+→ 最终自然语言回答
+```
 
-- 项目规则文档。
-- 产品、领域、架构、AI、安全规则和执行计划文档。
-- 后端空骨架。
-- 前端空骨架。
-- Docker Compose 配置。
+## 3. 已完成阶段
 
-### M2A 用户档案、健康约束、目标管理
+### Phase 1：真实 Provider 与通用 Model Contract
 
-状态：DONE
+状态：`DONE`
 
-范围：
+完成内容：
 
-- 唯一 `UserProfile`。
-- `HealthConstraint` 创建、编辑、停用、解决、归档。
-- `Goal` 创建、编辑、暂停、恢复、完成、取消、归档。
-- M2A 审计追加写。
-- `/plan/setup/profile`、`/plan/setup/constraints`、`/plan/setup/goals`。
+- 当前 Python 主目录统一为 `health_agent/`。
+- 产品运行不再默认使用 MockProvider。
+- Provider 合同迁移为通用 `complete_turn(...)`。
+- OpenAI-compatible Provider 支持普通文本、Tool Call、usage 和 finish reason 解析。
+- 产品 Bootstrap 显式注入真实 Provider。
+- 测试 Scripted Provider 仅位于 `tests/`。
+- 删除旧业务 Mock、Smoke 和 Eval 主路径。
 
-不包含：
+验收：
 
-- AI 调用。
-- AI 计划生成。
-- Plan 和 PlanVersion。
-- 今日执行。
-- 周分析。
-- 规则引擎。
-- 登录注册。
-- 多用户。
-- 文件上传。
-- 复杂动作库。
+- compileall 通过。
+- unittest 通过。
+- 缺配置时明确失败，不回退 Mock。
 
-M2A-FIX 验收要求：
+### Phase 1.1：LLM 配置入口收口
 
-- 普通状态接口不能归档。
-- 专用归档接口要求原因、设置 `archivedAt`、写入归档审计。
-- Goal 只有 `ACTIVE` 和 `PAUSED` 可编辑。
-- Goal 单位和值规则符合领域模型。
-- Persistence DO 与领域聚合分离。
-- Repository Port 显式区分 `insert` 和 `update`。
-- V2 Flyway 约束通过 PostgreSQL Testcontainers。
-- 前端显示中文枚举标签，提交前执行表单校验。
-- 文档和测试脱敏。
+状态：`DONE`
 
-自动化验证：
+完成内容：
 
-- 后端测试通过。
-- 前端 `pnpm install --frozen-lockfile`、`typecheck`、`build` 通过。
-- Docker Compose 配置可校验。
-- `git diff --check` 通过。
-- 隐私和架构搜索检查通过。
+- 环境变量统一为 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_TIMEOUT_SECONDS`。
+- 规范 `.env` 路径为 `health_agent/.env`。
+- shell 环境变量优先于 `.env`。
+- `LLMSettings` 为唯一 LLM 配置对象。
+- Provider 不读取环境变量，不加载 `.env`。
+- `RUN_LLM_INTEGRATION` 显式控制真实集成测试。
 
-页面人工验收完成前，M2A 只能记录为：
+验收：
 
-> 代码验收通过，等待用户页面人工验收
+- `.env` 被 Git ignore。
+- API Key 不进入 repr、日志或异常。
+- 默认测试不访问网络。
 
-用户页面人工验收清单：
+### Phase 1.2：真实 LLM 接入验收
 
-- 创建和更新个人档案。
-- 创建、编辑、停用、解决和归档健康约束。
-- 创建、暂停、恢复、完成、取消和归档目标。
-- 验证终态目标不能编辑。
-- 验证内部枚举均显示为中文。
-- 验证刷新页面后数据存在。
+状态：`DONE`
 
-### M2B 计划、计划版本和人工确认
+完成内容：
 
-状态：DONE
+- 真实 Provider 网络请求成功。
+- `agent.main` 经 Bootstrap 调用真实 LLM。
+- Provider 返回合法 `ModelResponse`。
+- 真实响应成功进入 `INITIAL_PLANNING` 兼容解析。
+- 进程 exit code 为 0。
 
-范围：
+### Phase 1.3：INITIAL_PLANNING 兼容层去污染
 
-- 唯一长期 Plan。
-- 手工创建 7 天计划草案。
-- 从 `CONFIRMED` 或 `SUPERSEDED` 版本复制创建新草案。
-- 草案预览、确认和取消。
-- `DRAFT`、`CONFIRMED`、`SUPERSEDED`、`CANCELLED` 状态。
-- 当前计划按日期查询 `CONFIRMED` 版本。
-- 版本历史。
-- Goal 关联、确认时目标摘要快照和 ACTIVE 健康约束稳定快照。
-- `revision` 并发控制。
-- 必须 POST 接口的 `Idempotency-Key` 幂等控制。
-- M2B 审计追加写。
-- `confirm`、`cancel`、删除计划日、删除计划条目均校验 `expectedRevision`。
-- 当前计划日期按 `UserProfile.timezone` 或显式 `app.default-timezone` 计算。
+状态：`DONE`
 
-不包含：
+完成内容：
 
-- AI。
-- 今日执行。
-- 每日指标记录。
-- 周分析。
-- 规则引擎。
-- 登录或多用户。
-- 通知。
-- 复杂动作库。
+- 删除 Python 主路径中的 Java/Domain Kernel 职责文案。
+- 删除未经用户输入确认的颈椎、血压、游泳等固定健康注入。
+- 删除业务型 TodayAction fallback。
+- `questions` 改为结构化对象数组。
+- Runtime 提供 currentDate/currentDateTime/timezone/locale。
+- 信息不足可返回 `insufficient_information` 与空草案。
 
-自动化验证：
+验收：
 
-- 后端测试通过。
-- 前端 `pnpm install --frozen-lockfile`、`typecheck`、`build` 通过。
-- Docker Compose 配置可校验。
-- `git diff --check` 通过。
-- stale revision、跨 UTC 日期、preview、历史快照、V5 数据库约束和扩展 PlanItemType 均有自动化测试覆盖。
+- 确定性测试通过。
+- 真实 LLM 返回 `insufficient_information` 空草案。
+- 未询问今天日期。
+- 未出现未经确认的健康限制。
+- 未出现 Java 文案。
 
-页面人工验收清单：
+## 4. 当前阶段
 
-- 创建唯一长期 Plan。
-- 创建 7 天草案并编辑计划日。
-- 为计划日添加、编辑和删除条目。
-- 预览并确认计划。
-- 提前确认未来周期计划。
-- 从已确认版本复制新周期草案。
-- 同周期修订确认后旧版本显示为已替代。
-- 双击确认不会重复确认或重复审计。
-- 模拟网络失败、408、429 或 5xx 后重试不会生成第二个业务结果。
-- 已确认历史详情展示确认时健康约束和目标摘要，不受后续修改影响。
-- `CARDIO`、`NUTRITION`、`MEASUREMENT` 类型能正常显示中文并刷新后保留。
-- 刷新页面后版本历史和详情仍存在。
+### Phase 2A：通用只读 Tool Call Agent Loop
 
-### M2.5-A 技术与产品骨架
+状态：`READY`
 
-状态：IMPLEMENTED_WITH_BLOCKERS
+权威实施规范：
 
-范围：
+[`implementation/phase-2a-read-only-tool-call-loop.md`](implementation/phase-2a-read-only-tool-call-loop.md)
 
-- Flutter iOS、Android、macOS、Windows 主客户端最小骨架。
-- Flutter 调用 Java 后端，不直接调用 Python。
-- Java 创建并管理 `AgentRun`。
-- Java 在短事务创建 `AgentRun` 后异步调用 Python Agent Runtime。
-- Python 默认使用稳定 Model Mock 返回结构化结果。
-- Java 校验结构化结果并保存到 `AgentRun`。
-- Flutter 教练页展示 AgentRun 状态和结构化卡片。
-- 首台设备 bootstrap 初始化。
-- 后续设备配对。
-- 独立设备凭据和设备撤销。
-- 安全审计。
+#### 目标
 
-不包含：
+建立真实、有限轮次、非固定工作流的 Agent Loop：
 
-- AI 首次规划访谈。
-- Goal 开放模型改造。
-- HealthConstraint 候选。
-- Program、Phase、WeeklyPlan 生成。
-- DailyAction、DailyActionExecution。
-- Observation。
-- HealthKit / Health Connect。
-- 真实云模型供应商接入。
-- Vue 新业务页面。
+```text
+用户输入
+→ Model Turn
+→ Tool Call
+→ 只读 Tool 执行
+→ role=tool Result
+→ Model Turn
+→ Final content
+```
 
-自动化验证：
+#### 范围
 
-- 后端 Maven 测试通过。
-- Python Runtime 单元测试通过。
-- Flutter `flutter analyze`、`flutter test` 和四端 debug build 需在具备 Flutter SDK 的环境中执行；当前本机 `flutter` 命令不可用，尚未验证。
-- Docker Compose 配置可校验。
-- `git diff --check` 通过。
+- 通用 `AgentRequest` 与 `AgentRunResult`。
+- system/user/assistant/tool 消息合同。
+- assistant Tool Call 和 tool_call_id 关联。
+- ToolRegistry 白名单注册与模型 Schema 输出。
+- ToolExecutor 真实只读执行。
+- Tool Error 结构化返回模型。
+- 最大模型回合、最大工具次数和整体超时。
+- 正式产品工具 `convert_weight_unit`。
+- 通用 `agent.main` 与 `agent_console.py`。
+- `INITIAL_PLANNING` 隔离为显式 legacy 兼容入口。
 
-当前阻塞：
+#### 不包含
 
-- 当前环境缺少 Flutter SDK，无法执行 `flutter create` 生成真实四端 runner，也无法验证 `flutter_secure_storage` 四端插件兼容性和四端 debug build。
+- 写操作 Tool。
+- Safety Guard。
+- Confirmation Pause/Resume。
+- 数据库、Repository 或 Memory。
+- Plan Publish、DailyRecord。
+- FastAPI。
+- 多 Agent、Subagent、DAG 或工作流引擎。
+- Java、Flutter、Vue 或 Compose 改造。
 
-人工验收清单：
+#### 自动化验收
 
-- 通过服务端 CLI 生成 bootstrap code。
-- Flutter 输入 bootstrap code 初始化首台设备。
-- 错误、过期或已消费 code 被拒绝。
-- 初始化后不能再次初始化首台设备。
-- 已授权设备创建配对码。
-- 新设备通过配对码完成配对。
-- 撤销某台设备不影响其他设备。
-- 教练页点击“检查AI教练连接”后展示运行中、完成或失败状态。
-- 结构化卡片显示“AI教练服务已连接”。
-- 普通用户页面不展示 UUID、内部状态码或技术堆栈；开发调试信息必须折叠隔离。
+必须覆盖：
 
-### M2.5-B AI 首次规划闭环
+- 直接回答。
+- 单 Tool Call。
+- 同回合多个 Tool Call。
+- 未知工具。
+- 参数非法。
+- handler 异常。
+- Tool 结果非法。
+- 空模型响应。
+- 最大模型回合。
+- 最大工具次数。
+- system → user → assistant(tool) → tool → assistant(final) 消息顺序。
+- Runtime Environment 日期唯一来源。
 
-状态：TODO
+执行：
 
-范围：
+```bash
+cd health_agent
+python3 -m compileall agent tests
+python3 -m unittest discover -s tests -v
+git diff --check
+```
 
-- 自然语言访谈。
-- AI 理解候选卡片。
-- 用户纠正和确认。
-- Goal 开放表达能力演进，但 Goal 仍是唯一事实来源。
-- HealthConstraint 候选确认，并保留开放表达字段。
-- Program 草案。
-- Phase 草案。
-- 首周 WeeklyPlan 草案。
-- 安全检查。
-- 用户确认后发布现有 PlanVersion。
+#### 真实 LLM 验收
 
-### M2.5-C 最小今日执行反馈
+输入：
 
-状态：TODO
+```text
+190 斤是多少公斤？请调用可用的重量转换工具，不要自行心算。
+```
 
-范围：
+必须确认：
 
-- 今日行动卡。
-- 完成、部分完成、跳过。
-- 最小 `DailyActionExecution`。
-- 训练结束一次简短反馈。
-- Agent 记忆候选。
-- 用户查看和纠正 AI 理解。
+- 模型返回原生 `convert_weight_unit` Tool Call。
+- ToolExecutor 得到约 95 kg。
+- Tool Result 以 role=tool 返回模型。
+- 模型返回最终自然语言答案。
+- 至少 2 次模型回合、至少 1 次工具调用。
+- 不经过 `INITIAL_PLANNING`。
+- 产品路径无 Mock、Fake 或 Smoke。
 
-不包含：
+#### 完成条件
 
-- 完整 Observation。
-- 周分析。
-- 设备同步。
-- 训练播放器。
+只有自动化测试和真实 LLM Tool Call 验收均完成后，状态才能从 `READY` 更新为 `DONE`。
 
-### M3 今日执行和每日数据记录
+## 5. 后续阶段
 
-状态：TODO
+### Phase 2B：只读健康上下文工具
+
+状态：`TODO`
+
+候选范围：
+
+- `get_user_profile`
+- `get_current_plan`
+- `get_recent_daily_records`
+- `get_training_history`
+- `get_execution_summary`
+
+前提：先确定内存/Repository Port 与数据来源；不得在 Runtime 中硬编码用户健康事实。
+
+### Phase 2C：Session、Events 与 Persistence
+
+状态：`TODO`
 
 范围：
 
-- 今日页读取当前计划版本。
-- 每日任务完成状态。
-- 训练、身体指标、症状和饮食执行记录。
-- `BodyMetricEntry` 提供后续“当前体重”的事实来源。
+- SQLite 或其它经确认的本地持久化。
+- Session/Event 模型。
+- AgentRun 与 ToolCall 审计摘要。
+- 运行恢复所需的最小状态。
 
-### M4 周分析和确定性规则
+### Phase 3：强制 Safety Guard
 
-状态：TODO
-
-范围：
-
-- 生成 7 天周分析。
-- 实现疼痛、睡眠、游泳呛水、完成率、血压提醒等确定性规则。
-
-### M5 AI 起草及调整建议
-
-状态：TODO
+状态：`TODO`
 
 范围：
 
-- OpenAI 兼容接口调用。
-- 结构化 JSON 输出。
-- JSON Schema 校验。
-- 语义校验。
-- 规则后置校验。
+- Input Guard。
+- Pre-Tool Guard。
+- Pre-Publish Guard。
+- Pre-Output Guard。
+- 确定性 BLOCK/WARN 决策。
 
-### M6 调整确认和新计划版本
+Safety 不得仅实现成模型可选 Tool。
 
-状态：TODO
+### Phase 4：Proposal、Confirmation 与 Publish
 
-范围：
-
-- 全部接受。
-- 部分接受。
-- 全部拒绝。
-- 接受项生成新计划版本。
-- 审计记录。
-
-### M7 部署、备份和个人验收
-
-状态：TODO
+状态：`TODO`
 
 范围：
 
-- 私有部署说明。
-- Tailscale 访问说明。
-- 本地数据导出或备份。
-- 端到端人工验收。
+- Proposal Tool。
+- Runtime `PENDING_CONFIRMATION` 暂停协议。
+- 确认关联、内容哈希、revision 与幂等。
+- 发布前 Safety Guard。
+- PlanVersion 与快照语义迁移。
 
-## 4. OPEN
+`request_user_confirmation` 不作为普通 Tool。
 
-- OPEN: `HealthConstraint.bodyRegion` 是否需要支持多选；M2A 默认单选。
-- OPEN: 是否在 M2A API 中提供审计查询；默认只写入。
-- OPEN: 是否将 `displayName` 默认填充为固定昵称；默认不自动填。
-- OPEN: 是否在 M2A 前端显示 `RESOLVED` 项；默认在非归档列表中显示，并明确标记“已解决”。
-- OPEN: 云模型具体供应商和模型。
-- OPEN: 月度成本上限。
-- OPEN: 模型调用数据保留周期。
-- OPEN: 提醒静默时段和主动询问次数上限。
-- OPEN: HealthKit 和 Health Connect 插件选择。
-- OPEN: bootstrap code 的有效时长、字符格式和失败次数限制配置值。
+### Phase 5：档案、记录和训练领域迁移
+
+状态：`TODO`
+
+范围：
+
+- UserProfile。
+- Health Facts/Constraints。
+- Daily Records。
+- Training Records。
+- Plan/PlanVersion。
+- Repository Ports 与 Persistence Adapters。
+- 旧 Java 领域不变量迁移。
+
+### Phase 6：产品 API 与客户端
+
+状态：`TODO`
+
+范围：
+
+- FastAPI 产品入口。
+- API 鉴权与隐私边界。
+- 正式客户端选择与迁移。
+- legacy Java/Flutter/Compose 下线计划。
+
+## 6. Legacy 说明
+
+旧文档曾记录以下路线：
+
+```text
+Flutter → Java AgentRun → Python Runtime
+```
+
+该路线已由 ADR 0010 替代，不再是当前实施目标。
+
+历史代码可以用于迁移业务语义，但不得因为旧实现存在而声称当前 Python 产品已经具备：
+
+- Plan 发布。
+- 数据库存储。
+- Safety Guard。
+- Confirmation Resume。
+- 正式客户端端到端链路。
+
+## 7. OPEN
+
+- Phase 2C 的本地持久化最终选择 SQLite 还是其它方案。
+- Python 模块化单体中旧 PlanVersion、revision、幂等和审计语义的迁移顺序。
+- 正式客户端继续使用 Flutter、改为 Web，还是先以 API/CLI 完成闭环。
+- 医疗与运动安全阈值的专业依据与审核流程。
