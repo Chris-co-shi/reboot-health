@@ -12,6 +12,7 @@ from scripts.smoke_initial_planning import (
     MINIMAL_CONTRACT_SCHEMA_VERSION,
     SAMPLE_PAYLOAD,
     _apply_diagnostic_defaults,
+    _apply_cli_model_timeout,
     _env_flag,
     _load_dotenv_file,
     _minimal_contract_failures,
@@ -119,6 +120,12 @@ class SmokeInitialPlanningSummaryTest(unittest.TestCase):
         with patch.dict(os.environ, {"REBOOT_HEALTH_MODEL_DEBUG_LOG": "false"}):
             self.assertFalse(_model_debug_enabled(cli_enabled=False))
             self.assertTrue(_model_debug_enabled(cli_enabled=True))
+
+    def test_model_timeout_cli_overrides_environment(self) -> None:
+        with patch.dict(os.environ, {"REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS": "30"}):
+            _apply_cli_model_timeout(45.0)
+
+            self.assertEqual(os.environ["REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS"], "45.0")
 
     def test_smoke_loads_model_config_from_dotenv(self) -> None:
         keys = (

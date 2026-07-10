@@ -44,6 +44,7 @@ class RunTrace:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     final_outcome: str | None = None
     warnings: list[str] = field(default_factory=list)
+    quality_findings: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """返回外部可断言的 camelCase trace 结构。"""
@@ -56,6 +57,7 @@ class RunTrace:
             "toolCalls": self.tool_calls,
             "finalOutcome": self.final_outcome,
             "warnings": self.warnings,
+            "qualityFindings": self.quality_findings,
             "provider": self.provider,
         }
 

@@ -1,7 +1,8 @@
 """INITIAL_PLANNING eval runner。
 
-该脚本执行固定 eval case，验证 single-shot INITIAL_PLANNING 的合同、安全边界和
-trace 摘要。它不接数据库、不接 Java，也不保存任何模型输出。
+该脚本执行固定 offline eval case，验证 single-shot INITIAL_PLANNING 的合同、
+安全边界和 trace 摘要。它不接数据库、不接 Java、不调用真实模型，也不保存任何
+模型输出。
 """
 
 from __future__ import annotations
@@ -16,11 +17,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent.models.openai_compatible import OpenAICompatibleProvider
 from agent.runtime.core import AgentCore
 from scripts.smoke_initial_planning import (
     _apply_diagnostic_defaults,
-    _env_flag,
     _load_dotenv_file,
     _redacted_trace,
 )
@@ -51,9 +50,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run INITIAL_PLANNING eval cases.")
     parser.add_argument(
         "--provider",
-        choices=("mock", "openai-compatible"),
+        choices=("mock",),
         default="mock",
-        help="Provider to use for eval cases.",
+        help="Provider to use for offline eval cases. Only mock is allowed.",
     )
     parser.add_argument(
         "--print-trace",
@@ -77,11 +76,9 @@ def load_eval_cases(cases_dir: Path = CASES_DIR) -> list[dict[str, Any]]:
 
 
 def build_provider(provider_name: str) -> object | None:
-    """构造 eval provider；mock provider 由 AgentCore.default 注入。"""
-    if provider_name == "openai-compatible":
-        return OpenAICompatibleProvider(
-            debug_log=_env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG")
-        )
+    """构造 eval provider；offline eval 只允许 mock。"""
+    if provider_name != "mock":
+        raise ValueError("offline eval runner only supports mock provider")
     return None
 
 

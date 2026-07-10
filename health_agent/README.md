@@ -1,6 +1,6 @@
-# Python-first Health Agent Backend
+# Python Health Agent Harness
 
-`health_agent` 是 reboot-health 的 Python-first Health Agent Backend。它不是普通健康 CRUD，也不是单纯聊天框；它负责把用户自然语言转成可审计的候选理解、计划草案、今日行动和后续确认请求。
+`health_agent` 是 reboot-health 的 Python Health Agent Harness。它不是普通健康 CRUD，也不是单纯模型调用封装；它负责把用户自然语言转成可运行、可追踪、可评估的候选理解、计划草案、今日行动和后续确认请求。
 
 当前核心闭环：
 
@@ -41,13 +41,25 @@ health_agent/
   tests/            # unittest 测试
 ```
 
-## 当前状态
+## 当前 Harness 状态
 
-- `INITIAL_PLANNING` single-shot skill 已完成。
-- `MockProvider` 保持本地测试稳定。
-- Harness Core Skeleton 已按 Python-first 结构落位。
-- PostgreSQL、Redis、FastAPI、真实模型暂未接入。
-- Agent Loop、Tool 执行、Memory 持久化、插件加载仍是后续纵向切片。
+当前是 **Interactive Single-shot Harness**，不是 ReAct，不是 Autonomous Agent。
+
+| 能力 | 状态 | 说明 |
+| --- | --- | --- |
+| 可输入 | ✅ | smoke/console 可传入自然语言、profile、goal、constraint、preference。 |
+| 可运行 | ✅ | `AgentCore`/`AgentLoop` 可运行 `INITIAL_PLANNING`。 |
+| 可追踪 | ✅ | `RunTrace` 记录 run、skill、provider、quality gate、memory candidate 等摘要。 |
+| 可保存 | ❌ | 只有 console 本地脱敏 summary 保存；没有正式 run persistence。 |
+| 可评估 | 🟡 | offline eval cases/runner 已有，仍需扩展覆盖面。 |
+| 可调用工具 | 🟡 skeleton | Tool contract/registry/executor 仅骨架，不接 shell/file/sql/DB。 |
+| 可多步决策 | ❌ | 当前不是 ReAct，也没有 structured multi-step loop。 |
+| 可沉淀记忆 | 🟡 candidate only | 只生成 `MemoryCandidate`，不确认、不持久化。 |
+
+- `INITIAL_PLANNING` single-shot 技术链路已完成。
+- `AgentRunResult`、`RunTrace`、`PlanningQualityGate` 已接入 AgentLoop。
+- OpenAI-compatible Provider 已接入；默认仍使用 `MockProvider` 保持本地测试稳定。
+- PostgreSQL、Redis、FastAPI、Java Runtime API、正式 persistence 均未开始。
 
 ## Harness 阶段命名
 
@@ -55,9 +67,9 @@ health_agent/
 
 - L0 Provider Harness：基本完成，OpenAI-compatible Provider 与 MockProvider 可用。
 - L1 Single-shot Skill Harness：技术链路完成，`INITIAL_PLANNING` 可运行到 `waiting_confirmation`。
-- L2 Trace + Eval Harness：当前阶段，目标是稳定 trace summary 与 eval cases。
-- L3 ReAct Loop Harness：未开始。
-- L4 Tool Harness：未开始。
+- L2 Trace + Eval Harness：当前阶段，目标是稳定 trace、run result、quality findings 与 offline eval cases。
+- L3 Tool Harness：未开始，仅有 skeleton。
+- L4 Structured ReAct Loop Harness：未开始。
 - L5 Memory Harness：未完成，当前只有 MemoryCandidate。
 - L6 Autonomy Policy：未开始。
 
@@ -74,6 +86,20 @@ Smoke run：
 ```bash
 cd health_agent
 python3 scripts/smoke_initial_planning.py
+```
+
+Interactive console：
+
+```bash
+cd health_agent
+python3 scripts/agent_console.py
+```
+
+Offline eval：
+
+```bash
+cd health_agent
+python3 scripts/eval_initial_planning.py
 ```
 
 或：
@@ -139,6 +165,13 @@ python3 scripts/smoke_initial_planning.py --print-draft-summary --print-trace --
 
 `REBOOT_HEALTH_MODEL_LOG_REQUEST` 和 `REBOOT_HEALTH_MODEL_LOG_RESPONSE` 支持
 `none|preview|raw`。`raw` 只用于本地临时诊断，可能打印完整 prompt 或模型返回正文。
+
+OpenAI-compatible Provider 只实现 OpenAI Chat Completions 兼容协议。OpenAI-compatible
+endpoint 与 Anthropic-compatible endpoint 不是同一个协议；MiniMax/Hermes 中某个
+base URL 可用，不代表当前 Provider 的 payload、response_format 或响应格式一定兼容。
+超时可通过 `REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS` 配置，或在 smoke 中用
+`--model-timeout-seconds` 临时覆盖；smoke/console 诊断日志不得打印 API key、完整
+prompt、完整健康原文或完整 raw response，除非本地显式使用 `raw`。
 
 ## 边界
 

@@ -42,6 +42,7 @@ class AgentRunResult:
     trace: RunTrace
     memory_candidates: tuple[MemoryCandidate, ...] = ()
     warnings: tuple[str, ...] = ()
+    quality_findings: tuple[Mapping[str, Any], ...] = ()
     error: AgentRunError | None = None
     schema_version: str = AGENT_RUN_SCHEMA_VERSION
 
@@ -60,5 +61,8 @@ class AgentRunResult:
             ],
             "trace": self.trace.to_dict(),
             "warnings": list(self.warnings),
+            "qualityFindings": [
+                dict(finding) for finding in self.quality_findings
+            ],
             "error": self.error.to_dict() if self.error else None,
         }

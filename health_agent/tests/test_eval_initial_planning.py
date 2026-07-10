@@ -1,6 +1,7 @@
 import unittest
 
 from scripts.eval_initial_planning import (
+    build_provider,
     evaluate_result,
     load_eval_cases,
     run_eval_cases,
@@ -11,18 +12,25 @@ class InitialPlanningEvalRunnerTest(unittest.TestCase):
     def test_eval_runner_loads_case_files(self) -> None:
         cases = load_eval_cases()
 
-        self.assertGreaterEqual(len(cases), 3)
+        self.assertGreaterEqual(len(cases), 5)
         names = {case["name"] for case in cases}
         self.assertIn("obese_bp_neck_swim_choking", names)
         self.assertIn("missing_profile", names)
         self.assertIn("high_risk_bp", names)
+        self.assertIn("neck_issue_heavy_lifting", names)
+        self.assertIn("low_fitness_basketball", names)
 
     def test_mock_provider_eval_runs_successfully(self) -> None:
         summary = run_eval_cases(load_eval_cases(), provider=None)
 
-        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["total"], 5)
         self.assertEqual(summary["failed"], 0)
-        self.assertEqual(summary["passed"], 3)
+        self.assertEqual(summary["passed"], 5)
+
+    def test_eval_runner_is_offline_mock_only(self) -> None:
+        self.assertIsNone(build_provider("mock"))
+        with self.assertRaises(ValueError):
+            build_provider("openai-compatible")
 
     def test_high_risk_case_does_not_recommend_high_intensity(self) -> None:
         case = next(case for case in load_eval_cases() if case["name"] == "high_risk_bp")

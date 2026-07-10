@@ -117,6 +117,7 @@ class AgentLoop:
             provider=self._provider_name_for(trigger),
         )
         self.last_trace = trace
+        quality_findings: tuple[Mapping[str, Any], ...] = ()
         self.trace_recorder.record_step(
             trace,
             "run_started",
@@ -217,6 +218,10 @@ class AgentLoop:
                     output,
                 )
                 trace.warnings.extend(quality_result.warnings)
+                quality_findings = tuple(
+                    finding.to_dict() for finding in quality_result.findings
+                )
+                trace.quality_findings.extend(dict(finding) for finding in quality_findings)
                 self.trace_recorder.record_step(
                     trace,
                     "quality_gate_checked",
@@ -263,6 +268,7 @@ class AgentLoop:
                 final_outcome=final_outcome,
                 output=output,
                 memory_candidates=self.last_memory_candidates,
+                quality_findings=quality_findings,
             )
         except ProviderResponseError as exc:
             session.status = RunStatus.FAILED
@@ -364,6 +370,7 @@ class AgentLoop:
             final_outcome: str,
             output: Mapping[str, Any],
             memory_candidates: tuple[MemoryCandidate, ...] = (),
+            quality_findings: tuple[Mapping[str, Any], ...] = (),
             error: AgentRunError | None = None,
     ) -> AgentRunResult:
         """构造稳定 AgentRunResult。"""
@@ -377,6 +384,7 @@ class AgentLoop:
             memory_candidates=memory_candidates,
             trace=trace,
             warnings=tuple(trace.warnings),
+            quality_findings=quality_findings,
             error=error,
         )
 

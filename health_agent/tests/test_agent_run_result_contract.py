@@ -56,6 +56,20 @@ class AgentRunResultContractTest(unittest.TestCase):
         self.assertEqual(trace["selectedSkill"], "INITIAL_PLANNING")
         self.assertEqual(trace["finalOutcome"], FINAL_OUTCOME_WAITING_CONFIRMATION)
         self.assertEqual(trace["provider"], "mock")
+        self.assertIn("qualityFindings", trace)
+
+    def test_agent_run_result_stably_outputs_quality_findings(self) -> None:
+        result = AgentLoop.default().run_detailed(
+            "INITIAL_PLANNING",
+            {"userText": "想低强度恢复训练。"},
+        )
+
+        payload = result.to_dict()
+
+        self.assertIn("qualityFindings", payload)
+        self.assertIsInstance(payload["qualityFindings"], list)
+        self.assertIn("qualityFindings", payload["trace"])
+        self.assertIsInstance(payload["trace"]["qualityFindings"], list)
 
     def test_trace_summary_contains_l2_steps_without_sensitive_content(self) -> None:
         user_text = "这是一段不应进入 trace 的完整健康原文，包含血压和训练偏好。"

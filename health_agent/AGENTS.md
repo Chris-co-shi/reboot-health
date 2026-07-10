@@ -2,7 +2,7 @@
 
 ## 定位
 
-`health_agent/` 是 reboot-health 的 Python-first Health Agent Backend，负责产品智能、任务编排、Skill 调用、候选生成和运行轨迹。它不是通用开发 Agent，也不是简单模型代理。
+`health_agent/` 是 reboot-health 的 Python Health Agent Harness，负责产品智能、任务编排、Skill 调用、候选生成、运行轨迹和 offline evaluation。它不是通用开发 Agent，也不是简单模型代理。
 
 Java Health Domain Kernel 仍是已确认事实、安全规则、权限、确认、审计、幂等和领域状态权威。
 
@@ -12,20 +12,34 @@ Java Health Domain Kernel 仍是已确认事实、安全规则、权限、确认
 - Capability lives at the edges：能力应放在 Skills、Tools、Memory、Models、Domain、Persistence、Storage 或 Plugins。
 - 新增健康能力优先新增或扩展 Skill，不要膨胀 `agent/runtime/core.py`。
 - 新增 Tool 必须通过 ToolRegistry 注册，声明权限、影响等级、输入输出 Schema、确认策略、幂等策略、超时和审计策略。
+- 当前 ToolExecutor 仍只是 skeleton，不得宣称已经具备真实业务工具调用能力。
 - Agent 不得直接访问 DB、Redis、文件系统或 shell。
 - Agent Loop、LLM、Prompt 不得直接访问 PostgreSQL、Redis、文件系统或任意外部资源。
 - Tool 内部可以调用 Domain Service；Domain Service 可以调用 Repository；Repository 才负责数据库访问。
-- MemoryCandidate 不等于 confirmed memory。
+- MemoryCandidate 不等于 confirmed memory，不得宣称已经沉淀为长期记忆、已确认事实或用户档案。
 - 健康安全规则优先于模型输出。
 - 重要健康事实、健康约束、目标、计划发布和训练负荷增加必须等待用户确认。
 - `.env` 只放 secrets；非 secret 配置后续放 `agent/settings.py` 或独立 config。
+- 普通 unittest 不允许调用真实模型、网络、数据库或外部服务。
+
+## Harness 长期规则
+
+- 运行结果必须能被结构化审计：`AgentRunResult` 是外部合同，`RunTrace` 是运行摘要。
+- QualityGate 发现项必须保留结构化形式；`warnings` 只作为兼容摘要。
+- Trace 和日志不得记录完整健康原文、完整 prompt、raw model response、API key 或认证信息。
+- Offline eval 只能使用静态 case、MockProvider 或 fake output，不调用真实模型。
+- 当前不是 ReAct，不是 Autonomous Agent；未实现 structured multi-step loop 前不得使用相关完成口径。
+- 候选、草案、解释都不是业务事实；确认、发布、保存和审计仍属于后续权威边界。
 
 ## 当前阶段
 
 - `INITIAL_PLANNING` single-shot skill 已完成。
-- 当前默认 Provider 是 `MockProvider`。
-- PostgreSQL、Redis、FastAPI、真实模型、多 Agent、消息队列和向量数据库暂未接入。
-- Agent Loop、Tool 执行、Memory 持久化、插件加载仍是后续纵向切片，不得宣称已经完成。
+- 当前默认 Provider 是 `MockProvider`；OpenAI-compatible Provider 已接入但不进入普通 unittest。
+- AgentLoop、AgentRunResult、RunTrace、PlanningQualityGate 已接入 single-shot Harness。
+- Offline eval runner/cases 已有基础版本，仍需扩展覆盖面。
+- ToolExecutor 仍是 skeleton；没有 shell/file/sql tool。
+- Memory 当前只有 MemoryCandidate，不持久化、不自动确认。
+- PostgreSQL、Redis、FastAPI、Java Runtime API、正式 Persistence、多 Agent、MCP、消息队列和向量数据库暂未接入。
 
 ## 目录规则
 

@@ -81,6 +81,7 @@ def main() -> None:
     args = _parse_args()
     _load_dotenv_file(PROJECT_ROOT / ".env")
     _apply_diagnostic_defaults()
+    _apply_cli_model_timeout(args.model_timeout_seconds)
     provider_name = _normalize_provider(
         args.provider or os.environ.get("REBOOT_HEALTH_AGENT_PROVIDER") or "mock"
     )
@@ -165,6 +166,11 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--model-timeout-seconds",
+        type=float,
+        help="Override REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS for this smoke run.",
+    )
+    parser.add_argument(
         "--provider-ping",
         action="store_true",
         help="Send a minimal OpenAI-compatible ping instead of running planning.",
@@ -187,6 +193,15 @@ def _apply_diagnostic_defaults() -> tuple[str, ...]:
         os.environ[key] = value
         applied.append(key)
     return tuple(applied)
+
+
+def _apply_cli_model_timeout(timeout_seconds: float | None) -> None:
+    """用 CLI 参数覆盖本次 smoke 的模型超时。"""
+    if timeout_seconds is None:
+        return
+    if timeout_seconds <= 0:
+        raise SystemExit("--model-timeout-seconds must be positive")
+    os.environ["REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS"] = str(timeout_seconds)
 
 
 def _load_dotenv_file(path: Path) -> tuple[str, ...]:

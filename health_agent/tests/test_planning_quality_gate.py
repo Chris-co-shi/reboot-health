@@ -225,6 +225,14 @@ class PlanningQualityGateTest(unittest.TestCase):
 
         payload = result.to_dict()
         self.assertIn("warnings", payload)
+        self.assertIn("qualityFindings", payload)
+        self.assertEqual(payload["qualityFindings"][0]["code"], "hiit_for_low_fitness")
+        self.assertEqual(payload["qualityFindings"][0]["severity"], "warning")
+        self.assertIn("qualityFindings", payload["trace"])
+        self.assertEqual(
+            payload["trace"]["qualityFindings"][0]["code"],
+            "hiit_for_low_fitness",
+        )
         self.assertIn(
             "quality:warning:hiit_for_low_fitness",
             "\n".join(payload["warnings"]),
