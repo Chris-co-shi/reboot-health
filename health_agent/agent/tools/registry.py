@@ -1,15 +1,16 @@
-"""Tool Registry 预留模块。
+"""只读 Tool Registry。
 
-所有 Tool 必须先注册到这里，Agent Loop 后续只能调用白名单 Tool。
+Registry 只负责白名单注册、查找和输出模型可见 Tool Definition，不执行 Tool。
 """
 
 from __future__ import annotations
 
-from agent.tools.contract import ToolDefinition
+from agent.models import ModelToolDefinition
+from agent.tools.contract import ToolDefinition, ToolPermission, ToolSideEffect
 
 
 class ToolRegistry:
-    """按名称管理 ToolDefinition 的内存注册表。"""
+    """按名称管理只读 ToolDefinition 的内存注册表。"""
 
     def __init__(self, definitions: list[ToolDefinition] | None = None) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
@@ -17,16 +18,43 @@ class ToolRegistry:
             self.register(definition)
 
     def register(self, definition: ToolDefinition) -> None:
-        """注册 ToolDefinition；名称为空时拒绝。"""
+        """注册只读无副作用 ToolDefinition。"""
+        if not isinstance(definition, ToolDefinition):
+            raise TypeError("ToolRegistry only accepts ToolDefinition")
         name = definition.name.strip()
         if not name:
             raise ValueError("Tool name must not be empty")
+        if name in self._definitions:
+            raise ValueError(f"Tool already registered: {name}")
+        if definition.permission != ToolPermission.READ_ONLY:
+            raise ValueError("Only READ_ONLY tools can be registered in Phase 2A")
+        if definition.side_effect != ToolSideEffect.NONE:
+            raise ValueError("Only side_effect=NONE tools can be registered in Phase 2A")
         self._definitions[name] = definition
 
     def get(self, name: str) -> ToolDefinition | None:
-        """按名称查找 ToolDefinition。"""
-        return self._definitions.get(name.strip())
+        """按名称查找 ToolDefinition；未知名称返回 None。"""
+        return self._definitions.get(str(name or "").strip())
+
+    def require(self, name: str) -> ToolDefinition:
+        """按名称查找 ToolDefinition；未知名称抛出明确异常。"""
+        normalized = str(name or "").strip()
+        definition = self.get(normalized)
+        if definition is None:
+            raise KeyError(f"Unknown tool: {normalized or '<empty>'}")
+        return definition
 
     def list(self) -> tuple[ToolDefinition, ...]:
         """返回已注册 ToolDefinition 的稳定排序快照。"""
         return tuple(self._definitions[name] for name in sorted(self._definitions))
+
+    def to_model_definitions(self) -> tuple[ModelToolDefinition, ...]:
+        """输出模型可见工具定义；不包含 handler、权限或内部实现细节。"""
+        return tuple(
+            ModelToolDefinition(
+                name=definition.name,
+                description=definition.description,
+                input_schema=definition.input_schema,
+            )
+            for definition in self.list()
+        )

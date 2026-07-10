@@ -1,14 +1,22 @@
-"""Tool Schema 预留模块。"""
+"""Tool Schema 兼容导出。
+
+产品 Tool 合同统一定义在 agent.tools.contract；本模块不再定义第二套 Tool 请求结构。
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from agent.tools.contract import (
+    ToolArgumentError,
+    ToolDefinition,
+    ToolExecutionResult,
+    ToolPermission,
+    ToolSideEffect,
+)
 
-
-@dataclass(frozen=True)
-class ToolCallRequest:
-    """一次受控 Tool 调用请求。"""
-
-    name: str
-    payload: dict[str, Any]
+__all__ = [
+    "ToolArgumentError",
+    "ToolDefinition",
+    "ToolExecutionResult",
+    "ToolPermission",
+    "ToolSideEffect",
+]
