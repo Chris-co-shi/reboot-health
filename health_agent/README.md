@@ -6,7 +6,7 @@
 
 ```text
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
-Phase 2A 通用只读 Tool Call Agent Loop：READY，尚未实现
+Phase 2A 通用只读 Tool Call Agent Loop：DONE
 ```
 
 Phase 2A 开发前必须读取：
@@ -17,17 +17,17 @@ Phase 2A 开发前必须读取：
 
 ```text
 用户输入
-→ AgentCore / AgentLoop
-→ InitialPlanningSkill 兼容层
-→ ModelProvider.complete_turn(messages, tools, options)
+→ 产品 Bootstrap
+→ GenericAgentLoop
 → OpenAI-compatible Chat Completions
-→ ModelResponse.content
-→ PlanningOutput 兼容解析与校验
+→ Assistant content 或原生 Tool Call
+→ ToolRegistry / ToolExecutor
+→ role=tool Result
+→ 下一轮真实模型
+→ 最终自然语言回答
 ```
 
-`INITIAL_PLANNING` 已完成真实 LLM 验收和去污染，但仍是临时兼容入口，不代表最终 Agent 架构。
-
-当前尚未实现完整 Tool Call Loop。兼容层收到模型 Tool Call 时会明确失败。
+`INITIAL_PLANNING` 已完成真实 LLM 验收和去污染，但现在只保留为显式 legacy compatibility 入口；默认 main 和 console 不再进入该路径。
 
 ## Phase 2A 目标模型
 
@@ -70,11 +70,12 @@ health_agent/
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | OpenAI-compatible Provider | `DONE` | 实现 `complete_turn()`，支持普通文本、Tool Call、usage 和 metadata 解析。 |
-| 产品 Bootstrap | `DONE` | 加载 `health_agent/.env` 并创建真实 Provider。 |
+| 产品 Bootstrap | `DONE` | 加载 `health_agent/.env`，创建真实 Provider、只读 ToolRegistry、ToolExecutor 和 GenericAgentLoop。 |
 | INITIAL_PLANNING | `LEGACY_COMPAT` | 真实 LLM 可运行；不再注入固定健康事实；后续显式隔离。 |
-| 通用 ModelMessage Tool 消息 | `PARTIAL` | 已有 Tool Call 数据结构，尚未完成 assistant/tool 往返消息。 |
-| ToolRegistry / ToolExecutor | `SKELETON` | 尚无真实产品 Tool 执行链路。 |
-| Tool Call Agent Loop | `READY` | 设计与验收已确认，尚未实现。 |
+| 通用 ModelMessage Tool 消息 | `DONE` | 支持 assistant tool_calls、role=tool、tool_call_id 和完整消息往返。 |
+| ToolRegistry / ToolExecutor | `DONE` | 只读白名单注册、模型 Schema 输出、确定性执行和结构化 Tool Result。 |
+| convert_weight_unit | `DONE` | 正式只读产品工具，支持 kg、lb、jin 确定性换算。 |
+| Tool Call Agent Loop | `DONE` | 支持直接回答、单/多 Tool Call、Tool Error 回送、运行限制和真实 LLM Tool Call 验收。 |
 | Persistence / API Server | `TODO` | 不接 FastAPI、数据库、Redis 或消息队列。 |
 | Safety / Confirmation | `TODO` | 必须在后续独立阶段实现。 |
 | 历史 HTTP 链路 | `LEGACY_UNAVAILABLE` | 旧跨运行时链路不是当前产品入口。 |
@@ -113,24 +114,39 @@ python3 -m unittest discover -s tests -v
 
 真实 LLM 集成测试位于 `tests/integration/test_real_llm_provider.py`。只有显式设置 `RUN_LLM_INTEGRATION=1` 且必要配置存在时才调用真实 LLM；默认 skip。
 
-Phase 2A 完成前还必须执行：
+Phase 2A 真实 Tool Call 集成测试位于 `tests/integration/test_real_tool_call_loop.py`，同样需要显式设置 `RUN_LLM_INTEGRATION=1`。
+
+Phase 2A 验收摘要：
+
+```text
+确定性测试：145 个，全部通过，默认跳过 2 个显式真实集成测试
+真实模型调用轮数：2
+真实工具调用次数：1
+真实工具名称：convert_weight_unit
+真实转换结果：190 jin → 95 kg
+真实入口不经过 INITIAL_PLANNING
+```
+
+Phase 2A 边界检查：
 
 ```bash
 rg "MockProvider|ScriptedModelProvider" agent scripts
 rg "eval\\(|exec\\(|subprocess|os\\.system" agent/tools agent/runtime
 ```
 
-并完成真实 Tool Call 验收，详见实施规范。
-
 ## 当前本地入口
 
 ```bash
 cd health_agent
 python3 -m agent.main
-python3 scripts/agent_console.py --user-text "想从低强度恢复训练"
+python3 scripts/agent_console.py --user-text "190 斤是多少公斤？请调用可用的重量转换工具，不要自行心算。"
 ```
 
-当前入口仍进入 `INITIAL_PLANNING` 兼容路径。Phase 2A 实施后，main 和 console 才切换为通用 AgentLoop。
+当前入口使用通用 GenericAgentLoop，输出安全摘要：
+
+```text
+status / modelTurns / toolCalls / answer
+```
 
 ## 开发阅读顺序
 

@@ -22,27 +22,21 @@
 ```text
 当前架构：Python-first 模块化单体
 当前真实目录：health_agent/
-当前已完成：Phase 1、1.1、1.2、1.3
-当前待实施：Phase 2A 通用只读 Tool Call Agent Loop
-下一步：依据 docs/implementation/phase-2a-read-only-tool-call-loop.md 实施
+当前已完成：Phase 1、1.1、1.2、1.3、Phase 2A
+当前待实施：Phase 2B 只读健康上下文工具
+下一步：先确定只读健康上下文的数据来源与 Repository Port，再实施 Phase 2B
 ```
 
-当前产品链路仍是：
-
-```text
-真实 LLM
-→ INITIAL_PLANNING 兼容入口
-→ 结构化 PlanningOutput
-```
-
-Phase 2A 完成后目标链路为：
+当前产品链路是：
 
 ```text
 用户输入
-→ 通用 AgentLoop
+→ 产品 Bootstrap
+→ GenericAgentLoop
 → 真实 LLM
 → 可选只读 Tool Call
-→ Tool Result
+→ ToolExecutor
+→ role=tool Result
 → 真实 LLM
 → 最终自然语言回答
 ```
@@ -125,7 +119,7 @@ Phase 2A 完成后目标链路为：
 
 ### Phase 2A：通用只读 Tool Call Agent Loop
 
-状态：`READY`
+状态：`DONE`
 
 权威实施规范：
 
@@ -215,7 +209,26 @@ git diff --check
 
 #### 完成条件
 
-只有自动化测试和真实 LLM Tool Call 验收均完成后，状态才能从 `READY` 更新为 `DONE`。
+已完成自动化测试和真实 LLM Tool Call 验收。
+
+验收摘要：
+
+```text
+确定性测试：145 个，全部通过，默认跳过 2 个显式真实集成测试
+真实模型调用轮数：2
+真实工具调用次数：1
+真实工具名称：convert_weight_unit
+真实转换结果：190 jin → 95 kg
+真实入口不经过 INITIAL_PLANNING
+```
+
+已确认：
+
+- `agent.main` 和 `scripts/agent_console.py` 默认进入通用 `GenericAgentLoop`。
+- 产品 Bootstrap 注册正式只读 `convert_weight_unit` Tool。
+- Tool Result 使用 `role=tool` 返回模型。
+- 产品路径无 Mock/Fake/Smoke。
+- 未记录 API Key、Base URL、完整 Prompt 或完整模型响应。
 
 ## 5. 后续阶段
 

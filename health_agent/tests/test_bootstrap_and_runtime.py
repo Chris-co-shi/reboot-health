@@ -3,12 +3,15 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from agent.bootstrap import create_agent_core_from_env
-from agent.models import ModelResponse, ProviderConfigurationError
+from agent.bootstrap import create_agent_core_from_env, create_generic_agent_loop_from_env
+from agent.models import ModelResponse, OpenAICompatibleProvider, ProviderConfigurationError
 from agent.runtime.core import AgentCore
+from agent.runtime.generic_loop import GenericAgentLoop
 from agent.runtime.loop import AgentLoop, LoopLimits
+from agent.tools.builtin.convert_weight import CONVERT_WEIGHT_UNIT_TOOL_NAME
+from agent.tools.contract import ToolPermission, ToolSideEffect
 
 from tests.support.scripted_model_provider import ScriptedModelProvider
 
@@ -22,6 +25,45 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
                     create_agent_core_from_env(dotenv_path=missing_dotenv)
 
         self.assertIn("LLM_BASE_URL", str(context.exception))
+
+    def test_generic_bootstrap_missing_llm_environment_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ProviderConfigurationError) as context:
+                    create_generic_agent_loop_from_env(dotenv_path=missing_dotenv)
+
+        self.assertIn("LLM_BASE_URL", str(context.exception))
+
+    def test_generic_bootstrap_wires_real_provider_and_convert_weight_tool(self) -> None:
+        fake_client = Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=fake_client):
+                    loop = create_generic_agent_loop_from_env(dotenv_path=missing_dotenv)
+
+        self.assertIsInstance(loop, GenericAgentLoop)
+        self.assertIsInstance(loop.provider, OpenAICompatibleProvider)
+        self.assertIs(loop.tool_executor.registry, loop.tool_registry)
+
+        definitions = loop.tool_registry.list()
+        self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
+        self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
+        self.assertEqual(definitions[0].side_effect, ToolSideEffect.NONE)
+        fake_client.chat.completions.create.assert_not_called()
+
+    def test_generic_bootstrap_returns_independent_runtime_instances(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    first = create_generic_agent_loop_from_env(dotenv_path=missing_dotenv)
+                    second = create_generic_agent_loop_from_env(dotenv_path=missing_dotenv)
+
+        self.assertIsNot(first, second)
+        self.assertIsNot(first.tool_registry, second.tool_registry)
+        self.assertIsNot(first.tool_executor, second.tool_executor)
 
     def test_agent_core_and_loop_require_injected_provider(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content=_planning_json())])
@@ -64,6 +106,24 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
 
         self.assertNotIn("tests.support", source)
         self.assertNotIn("ScriptedModelProvider", source)
+
+    def test_agent_core_legacy_factory_is_still_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    core = create_agent_core_from_env(dotenv_path=missing_dotenv)
+
+        self.assertIsInstance(core, AgentCore)
+        self.assertIsNotNone(core.registry.get("INITIAL_PLANNING"))
+
+
+def _llm_env() -> dict[str, str]:
+    return {
+        "LLM_BASE_URL": "https://llm.example.test/v1",
+        "LLM_API_KEY": "test-api-key",
+        "LLM_MODEL": "test-model",
+    }
 
 
 def _planning_json() -> str:
