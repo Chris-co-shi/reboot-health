@@ -349,13 +349,59 @@ def _message_to_openai(message: ModelMessage) -> dict[str, Any]:
             safe_summary="Model message role must not be empty",
         )
     result: dict[str, Any] = {"role": role}
-    if message.content is not None:
+    tool_calls = tuple(message.tool_calls or ())
+    if tool_calls:
+        if role != "assistant":
+            # ModelMessage.__post_init__ 已阻止；此处作为最终防御。
+            raise ProviderResponseError(
+                "tool_calls may only appear on assistant messages",
+                code="invalid_request",
+                safe_summary="tool_calls may only appear on assistant messages",
+            )
+        serialized_calls: list[dict[str, Any]] = []
+        for call in tool_calls:
+            serialized_calls.append(
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": _resolve_tool_call_arguments(call),
+                    },
+                }
+            )
+        result["tool_calls"] = serialized_calls
+        # OpenAI 协议允许 assistant tool_calls 与 content 并存；
+        # 若 Runtime 未显式提供 content，仍发送 null 以表达「纯工具调用回合」。
+        result["content"] = message.content
+    elif message.content is not None:
         result["content"] = message.content
     if message.name:
         result["name"] = message.name
     if message.tool_call_id:
+        if role != "tool":
+            raise ProviderResponseError(
+                "tool_call_id may only appear on tool messages",
+                code="invalid_request",
+                safe_summary="tool_call_id may only appear on tool messages",
+            )
         result["tool_call_id"] = message.tool_call_id
     return result
+
+
+def _resolve_tool_call_arguments(call: ModelToolCall) -> str:
+    """回送 assistant tool_calls 时，优先保留 Provider 解析的 raw_arguments。
+
+    若 raw_arguments 缺失或为空，则使用 arguments 重新 JSON 序列化；这保证
+    assistant tool_calls 在第二轮请求中始终带上 arguments 字符串。
+    """
+    raw = str(call.raw_arguments or "").strip()
+    if raw:
+        return raw
+    try:
+        return json.dumps(mutable_mapping(call.arguments), ensure_ascii=False)
+    except (TypeError, ValueError):
+        return "{}"
 
 
 def _tool_to_openai(tool: ModelToolDefinition) -> dict[str, Any]:

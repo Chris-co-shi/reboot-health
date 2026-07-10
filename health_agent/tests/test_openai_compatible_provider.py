@@ -4,6 +4,7 @@ import unittest
 from agent.models import (
     ModelMessage,
     ModelOptions,
+    ModelToolCall,
     ModelToolDefinition,
     OpenAICompatibleProvider,
     ProviderResponseError,
@@ -42,6 +43,142 @@ class OpenAICompatibleProviderTest(unittest.TestCase):
         self.assertEqual(response.usage.total_tokens, 7)
         self.assertEqual(response.provider_metadata["requestId"], "req-1")
         self.assertEqual(client.last_request["messages"][0]["content"], "hello")
+
+    def test_plain_system_user_assistant_messages_are_serialized(self) -> None:
+        client = _FakeOpenAIClient(
+            {
+                "choices": [
+                    {
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        provider = OpenAICompatibleProvider(settings=_provider_settings(), client=client)
+
+        provider.complete_turn(
+            messages=(
+                ModelMessage(role="system", content="You are concise."),
+                ModelMessage(role="user", content="hello"),
+                ModelMessage(role="assistant", content="hi"),
+            )
+        )
+
+        self.assertEqual(
+            client.last_request["messages"],
+            [
+                {"role": "system", "content": "You are concise."},
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+            ],
+        )
+
+    def test_assistant_single_tool_call_and_tool_result_are_serialized(self) -> None:
+        client = _FakeOpenAIClient(
+            {
+                "choices": [
+                    {
+                        "message": {"content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        provider = OpenAICompatibleProvider(settings=_provider_settings(), client=client)
+        tool_call = ModelToolCall(
+            id="call-1",
+            name="convert_weight_unit",
+            raw_arguments='{"value":190,"fromUnit":"jin","toUnit":"kg"}',
+            arguments={"value": 190, "fromUnit": "jin", "toUnit": "kg"},
+        )
+
+        provider.complete_turn(
+            messages=(
+                ModelMessage(role="user", content="190 斤是多少公斤？"),
+                ModelMessage(role="assistant", tool_calls=(tool_call,)),
+                ModelMessage(
+                    role="tool",
+                    content='{"value":95,"unit":"kg"}',
+                    tool_call_id="call-1",
+                ),
+            )
+        )
+
+        assistant_message = client.last_request["messages"][1]
+        self.assertEqual(assistant_message["role"], "assistant")
+        self.assertIsNone(assistant_message["content"])
+        self.assertEqual(len(assistant_message["tool_calls"]), 1)
+        self.assertEqual(assistant_message["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(assistant_message["tool_calls"][0]["type"], "function")
+        self.assertEqual(
+            assistant_message["tool_calls"][0]["function"],
+            {
+                "name": "convert_weight_unit",
+                "arguments": '{"value":190,"fromUnit":"jin","toUnit":"kg"}',
+            },
+        )
+        tool_message = client.last_request["messages"][2]
+        self.assertEqual(
+            tool_message,
+            {
+                "role": "tool",
+                "content": '{"value":95,"unit":"kg"}',
+                "tool_call_id": "call-1",
+            },
+        )
+
+    def test_assistant_multiple_tool_calls_with_content_are_serialized(self) -> None:
+        client = _FakeOpenAIClient(
+            {
+                "choices": [
+                    {
+                        "message": {"content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+        provider = OpenAICompatibleProvider(settings=_provider_settings(), client=client)
+        first_call = ModelToolCall(
+            id="call-1",
+            name="lookup_a",
+            raw_arguments='{"id":"a"}',
+            arguments={"id": "a"},
+        )
+        second_call = ModelToolCall(
+            id="call-2",
+            name="lookup_b",
+            raw_arguments='{"id":"b"}',
+            arguments={"id": "b"},
+        )
+
+        provider.complete_turn(
+            messages=(
+                ModelMessage(role="user", content="compare"),
+                ModelMessage(
+                    role="assistant",
+                    content="需要查询两个只读信息。",
+                    tool_calls=(first_call, second_call),
+                ),
+            )
+        )
+
+        assistant_message = client.last_request["messages"][1]
+        self.assertEqual(assistant_message["role"], "assistant")
+        self.assertEqual(assistant_message["content"], "需要查询两个只读信息。")
+        self.assertEqual(
+            [item["id"] for item in assistant_message["tool_calls"]],
+            ["call-1", "call-2"],
+        )
+        self.assertEqual(
+            [item["function"]["name"] for item in assistant_message["tool_calls"]],
+            ["lookup_a", "lookup_b"],
+        )
+        self.assertEqual(
+            [item["function"]["arguments"] for item in assistant_message["tool_calls"]],
+            ['{"id":"a"}', '{"id":"b"}'],
+        )
 
     def test_tool_call_arguments_are_preserved_and_parsed(self) -> None:
         client = _FakeOpenAIClient(

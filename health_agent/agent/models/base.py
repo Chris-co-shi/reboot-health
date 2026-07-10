@@ -30,14 +30,65 @@ class ProviderResponseError(RuntimeError):
         self.safe_summary = safe_summary or message
 
 
+class ModelRole:
+    """ModelMessage.role 的最小合法性集合。"""
+
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+    @classmethod
+    def all(cls) -> tuple[str, ...]:
+        return (cls.SYSTEM, cls.USER, cls.ASSISTANT, cls.TOOL)
+
+
 @dataclass(frozen=True)
 class ModelMessage:
-    """一次模型回合中的消息。"""
+    """一次模型回合中的消息。
+
+    Phase 2A 不变量：
+    - role 只能是 system / user / assistant / tool。
+    - assistant 消息可同时携带 content 与 tool_calls（content 可空）。
+    - tool 消息必须携带非空 tool_call_id。
+    - system / user / tool 消息不得携带 tool_calls。
+    - user / system 消息不应携带 tool_call_id。
+    """
 
     role: str
     content: str | None = None
     name: str | None = None
     tool_call_id: str | None = None
+    tool_calls: tuple[ModelToolCall, ...] = ()
+
+    def __post_init__(self) -> None:
+        role = str(self.role or "").strip()
+        if role not in ModelRole.all():
+            raise ValueError(
+                f"ModelMessage role must be one of {ModelRole.all()}, got {self.role!r}"
+            )
+        object.__setattr__(self, "role", role)
+        tool_calls = tuple(self.tool_calls or ())
+        object.__setattr__(self, "tool_calls", tool_calls)
+        if tool_calls:
+            for index, call in enumerate(tool_calls):
+                if not isinstance(call, ModelToolCall):
+                    raise ValueError(
+                        f"ModelMessage tool_calls[{index}] must be ModelToolCall"
+                    )
+        if role in (ModelRole.SYSTEM, ModelRole.USER, ModelRole.TOOL) and tool_calls:
+            raise ValueError(
+                f"role={role} messages must not carry tool_calls"
+            )
+        if role == ModelRole.TOOL:
+            tool_call_id = str(self.tool_call_id or "").strip()
+            if not tool_call_id:
+                raise ValueError("role=tool messages must carry a non-empty tool_call_id")
+            object.__setattr__(self, "tool_call_id", tool_call_id)
+        elif self.tool_call_id:
+            raise ValueError(
+                f"role={role} messages must not carry tool_call_id"
+            )
 
 
 @dataclass(frozen=True)
