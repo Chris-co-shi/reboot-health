@@ -22,27 +22,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from agent.bootstrap import create_agent_core_from_env
 from agent.models.base import ProviderConfigurationError
-from agent.models.openai_compatible import OpenAICompatibleProvider
-from agent.runtime.core import AgentCore
 
 
 CONSOLE_SUMMARY_SCHEMA_VERSION = "health-agent.console-run-summary.v0"
 DEFAULT_RUNS_DIR = PROJECT_ROOT / "runs"
-
-DIAGNOSTIC_DEFAULTS = {
-    "REBOOT_HEALTH_MODEL_DEBUG_LOG": "false",
-    "REBOOT_HEALTH_MODEL_LOG_REQUEST": "none",
-    "REBOOT_HEALTH_MODEL_LOG_RESPONSE": "none",
-    "REBOOT_HEALTH_AGENT_DEBUG_TRACE": "false",
-}
 
 
 @dataclass
 class ConsoleState:
     """Mutable local console state."""
 
-    provider_name: str = "mock"
     user_text: str = ""
     profile: dict[str, Any] = field(default_factory=dict)
     goals: list[Any] = field(default_factory=list)
@@ -75,18 +66,9 @@ class ConsoleState:
 def main(argv: list[str] | None = None) -> None:
     """Run one-shot mode when --user-text is present; otherwise start REPL."""
     args = _parse_args(argv)
-    _load_dotenv_file(PROJECT_ROOT / ".env")
-    _apply_diagnostic_defaults()
-    _configure_logging(
-        _env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG")
-        or _env_flag("REBOOT_HEALTH_AGENT_DEBUG_TRACE")
-    )
+    _configure_logging(_env_flag("REBOOT_HEALTH_AGENT_DEBUG_TRACE"))
 
-    state = ConsoleState(
-        provider_name=_normalize_provider(
-            args.provider or os.environ.get("REBOOT_HEALTH_AGENT_PROVIDER") or "mock"
-        )
-    )
+    state = ConsoleState()
     if args.profile_file:
         _load_profile_file_into_state(Path(args.profile_file), state)
     if args.user_text is not None:
@@ -102,11 +84,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Health Agent console.")
     parser.add_argument("--user-text", help="Run once with this user text.")
     parser.add_argument("--profile-file", help="Load a local JSON profile before run.")
-    parser.add_argument(
-        "--provider",
-        choices=("mock", "openai-compatible"),
-        help="Provider to use. Defaults to REBOOT_HEALTH_AGENT_PROVIDER or mock.",
-    )
     parser.add_argument(
         "--print-trace",
         action="store_true",
@@ -127,7 +104,7 @@ def _run_once(state: ConsoleState, print_trace: bool, save_run: bool) -> None:
     except ProviderConfigurationError as exc:
         print(
             json.dumps(
-                _configuration_error_summary(state.provider_name, exc),
+                _configuration_error_summary(state, exc),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -212,7 +189,7 @@ def _handle_command(line: str, state: ConsoleState) -> bool:
         except ProviderConfigurationError as exc:
             print(
                 json.dumps(
-                    _configuration_error_summary(state.provider_name, exc),
+                    _configuration_error_summary(state, exc),
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -250,22 +227,14 @@ def _handle_command(line: str, state: ConsoleState) -> bool:
 
 def _run_agent(state: ConsoleState) -> dict[str, Any]:
     """Run INITIAL_PLANNING through AgentCore/AgentLoop."""
-    provider = _build_provider(state.provider_name)
     payload = state.to_payload()
-    result = AgentCore.default(provider=provider).run_detailed(
+    result = create_agent_core_from_env().run_detailed(
         "INITIAL_PLANNING",
         payload,
     )
     state.last_payload = payload
     state.last_result = result.to_dict()
     return state.last_result
-
-
-def _build_provider(provider_name: str):
-    """Build the configured provider. Mock is represented by None."""
-    if provider_name == "openai-compatible":
-        return OpenAICompatibleProvider(debug_log=_env_flag("REBOOT_HEALTH_MODEL_DEBUG_LOG"))
-    return None
 
 
 def _load_profile_file_into_state(path: Path, state: ConsoleState) -> None:
@@ -359,7 +328,7 @@ def _run_summary(state: ConsoleState, include_trace: bool) -> dict[str, Any]:
         return {
             "schemaVersion": CONSOLE_SUMMARY_SCHEMA_VERSION,
             "status": "empty",
-            "provider": state.provider_name,
+            "provider": "openai-compatible",
             "error": {"code": "no_run", "message": "No run has been executed."},
         }
 
@@ -370,7 +339,7 @@ def _run_summary(state: ConsoleState, include_trace: bool) -> dict[str, Any]:
     summary = {
         "schemaVersion": CONSOLE_SUMMARY_SCHEMA_VERSION,
         "savedAt": datetime.now(timezone.utc).isoformat(),
-        "provider": state.provider_name,
+        "provider": trace.get("provider") or "openai-compatible",
         "runId": result.get("runId"),
         "sessionId": result.get("sessionId"),
         "status": result.get("status"),
@@ -419,7 +388,7 @@ def _redacted_trace(state: ConsoleState) -> object:
 def _profile_summary(state: ConsoleState) -> dict[str, Any]:
     """Return local profile state without dumping complete user text."""
     return {
-        "provider": state.provider_name,
+        "provider": "openai-compatible",
         "hasUserText": bool(state.user_text),
         "userTextChars": len(state.user_text),
         "profile": _redacted_preview(state.profile, state),
@@ -530,12 +499,11 @@ def _redacted_error(error: object, state: ConsoleState) -> object:
     }
 
 
-def _configuration_error_summary(provider_name: str, exc: Exception) -> dict[str, Any]:
+def _configuration_error_summary(state: ConsoleState, exc: Exception) -> dict[str, Any]:
     """Return a structured provider configuration error."""
-    state = ConsoleState(provider_name=provider_name)
     return {
         "schemaVersion": CONSOLE_SUMMARY_SCHEMA_VERSION,
-        "provider": provider_name,
+        "provider": "openai-compatible",
         "status": "failed",
         "finalOutcome": "failed",
         "error": {
@@ -550,8 +518,7 @@ def _redact_text(value: str, state: ConsoleState) -> str:
     text = re.sub(r"Bearer\s+\S+", "Bearer <redacted>", value)
     text = re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-<redacted>", text)
     for key in (
-        os.environ.get("REBOOT_HEALTH_MODEL_API_KEY"),
-        os.environ.get("AGENT_OPENAI_API_KEY"),
+        os.environ.get("LLM_API_KEY"),
         state.user_text,
     ):
         if key:
@@ -588,55 +555,6 @@ def _is_sensitive_key(key: str) -> bool:
     )
 
 
-def _load_dotenv_file(path: Path) -> tuple[str, ...]:
-    """Load missing environment values from a minimal .env file."""
-    if not path.exists():
-        return ()
-    loaded: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        parsed = _parse_dotenv_line(raw_line)
-        if parsed is None:
-            continue
-        key, value = parsed
-        if key in os.environ:
-            continue
-        os.environ[key] = value
-        loaded.append(key)
-    return tuple(loaded)
-
-
-def _parse_dotenv_line(raw_line: str) -> tuple[str, str] | None:
-    """Parse a minimal dotenv line."""
-    line = raw_line.strip()
-    if not line or line.startswith("#"):
-        return None
-    if line.startswith("export "):
-        line = line[len("export "):].strip()
-    if "=" not in line:
-        return None
-    key, value = line.split("=", 1)
-    key = key.strip()
-    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-        return None
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1]
-    else:
-        value = value.split(" #", 1)[0].rstrip()
-    return key, value
-
-
-def _apply_diagnostic_defaults() -> tuple[str, ...]:
-    """Apply safe diagnostic defaults when not configured."""
-    applied: list[str] = []
-    for key, value in DIAGNOSTIC_DEFAULTS.items():
-        if str(os.environ.get(key) or "").strip():
-            continue
-        os.environ[key] = value
-        applied.append(key)
-    return tuple(applied)
-
-
 def _configure_logging(enabled: bool) -> None:
     """Enable local diagnostic logs."""
     if not enabled:
@@ -656,14 +574,6 @@ def _env_flag(name: str) -> bool:
         "on",
         "debug",
     )
-
-
-def _normalize_provider(value: str) -> str:
-    """Normalize provider name."""
-    normalized = value.strip().lower().replace("_", "-")
-    if normalized in ("openai", "openai-compatible"):
-        return "openai-compatible"
-    return "mock"
 
 
 def _help_text() -> str:

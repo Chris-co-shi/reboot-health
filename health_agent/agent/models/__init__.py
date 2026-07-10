@@ -1,21 +1,35 @@
-"""Model Provider 包公共导出。
-
-这里集中导出当前阶段可用 Provider，调用方不需要知道具体文件路径。默认测试路径
-使用 MockProvider；OpenAICompatibleProvider 只提供接口实现，不在测试中接真实模型。
-"""
+"""Model Provider 包公共导出。"""
 
 from agent.models.base import (
-    BaseModelProvider,
+    ModelMessage,
+    ModelOptions,
+    ModelProvider,
+    ModelResponse,
+    ModelToolCall,
+    ModelToolDefinition,
+    ModelUsage,
     ProviderConfigurationError,
     ProviderResponseError,
 )
-from agent.models.mock import MockProvider
-from agent.models.openai_compatible import OpenAICompatibleProvider
 
 __all__ = [
-    "BaseModelProvider",
-    "MockProvider",
+    "ModelMessage",
+    "ModelOptions",
+    "ModelProvider",
+    "ModelResponse",
+    "ModelToolCall",
+    "ModelToolDefinition",
+    "ModelUsage",
     "OpenAICompatibleProvider",
     "ProviderConfigurationError",
     "ProviderResponseError",
 ]
+
+
+def __getattr__(name: str):
+    """Lazily expose concrete providers without coupling base contracts to config."""
+    if name == "OpenAICompatibleProvider":
+        from agent.models.openai_compatible import OpenAICompatibleProvider
+
+        return OpenAICompatibleProvider
+    raise AttributeError(name)

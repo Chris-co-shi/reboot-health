@@ -5,6 +5,7 @@ description = "Python-first Health Agent Backend for reboot-health."
 requires-python = ">=3.12"
 dependencies = [
   "openai>=1.0.0,<2.0.0",
+  "python-dotenv>=1.0.0,<2.0.0",
 ]
 
 [tool.pytest.ini_options]

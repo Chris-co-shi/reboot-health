@@ -1,7 +1,7 @@
-"""Health Agent 非敏感配置入口。
+"""Health Agent 非 LLM 配置入口。
 
-`.env` 只应放 secrets。后续非敏感运行配置会收敛到本模块或独立 config 文件，避免
-把模型、工具、数据库等策略散落在环境变量中。
+LLM 连接配置由 `agent.config` 和产品 Bootstrap 负责读取；本模块保留给
+后续非模型运行配置，避免把工具、数据库等策略散落在环境变量中。
 """
 
 from __future__ import annotations

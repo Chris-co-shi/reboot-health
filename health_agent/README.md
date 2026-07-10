@@ -1,79 +1,93 @@
 # Python Health Agent Harness
 
-`health_agent` 是 reboot-health 的 Python Health Agent Harness。它不是普通健康 CRUD，也不是单纯模型调用封装；它负责把用户自然语言转成可运行、可追踪、可评估的候选理解、计划草案、今日行动和后续确认请求。
+`health_agent/` 是 reboot-health 当前真实 Python Runtime 目录。产品运行入口直接使用 OpenAI-compatible Chat Completions Provider，不会在配置缺失时回退到测试替身。
 
-当前核心闭环：
+当前仍处于 `INITIAL_PLANNING` 兼容阶段：旧 Planning Prompt、PlanningInput、PlanningOutput 和 Schema 暂时保留；Provider 已迁移到通用 Model Turn Contract。
+
+## 运行模型
 
 ```text
-natural language -> understanding candidate -> confirmation -> plan draft -> today action -> feedback -> memory candidate
+用户输入
+→ AgentCore / AgentLoop
+→ InitialPlanningSkill 兼容层
+→ ModelProvider.complete_turn(messages, tools, options)
+→ OpenAI-compatible Chat Completions
+→ ModelResponse.content
+→ PlanningOutput 兼容解析与校验
 ```
 
-Java Health Domain Kernel 仍是已确认事实、安全规则、权限、确认、审计、幂等和领域状态权威。Python 输出只能是候选、草案或解释。
-
-## 架构原则
-
-- `agent/runtime` 是 narrow waist，只做触发归一化、Skill 分发和运行边界收敛。
-- 能力放在边缘：`skills`、`tools`、`memory`、`models`、`domain`、`persistence` 后续按纵向切片扩展。
-- 健康能力优先通过 Skill 增加，不膨胀 Core。
-- Agent 只能调用 ToolRegistry 中注册的白名单 Tool。
-- Agent Loop、LLM、Prompt 不直接访问 PostgreSQL、Redis、文件系统或任意外部资源。
-- AI 输出不是确认事实；重要健康事实、健康约束、目标和计划发布必须等待用户确认。
+本阶段尚未实现完整 Tool Call Loop。`INITIAL_PLANNING` 兼容层收到模型 Tool Call 时会明确失败。
 
 ## 目录结构
 
 ```text
 health_agent/
   agent/
-    runtime/        # Core、Loop、Session、Context、Trace、State
-    models/         # Mock 与 OpenAI-compatible Provider 接口实现
-    tools/          # Tool contract、registry、executor
-    skills/         # Python Skill 实现与 Registry
-    memory/         # MemoryCandidate 与管理骨架
-    domain/         # 健康领域服务预留边界
-    persistence/    # Repository/DB 预留边界
-    api/            # API 层预留边界，当前不接 Web 框架
-    storage/        # 受控文件存储边界
-    schemas/        # Agent、Planning、Tool、Memory、Health Schema
-  skills/           # 外置 Skill 资产
-  prompts/          # 公共 Prompt 边界与输出合同
-  plugins/          # 后续插件扩展预留
-  scripts/          # 本地验证脚本
-  tests/            # unittest 测试
+    bootstrap.py     # 产品 Composition Root
+    runtime/         # Core、Loop、Session、Trace、State
+    models/          # 通用 ModelProvider 合同与 OpenAI-compatible Provider
+    tools/           # Tool contract、registry、executor 骨架
+    skills/          # 临时 INITIAL_PLANNING 兼容 Skill
+    schemas/         # Agent、Planning、Tool、Memory、Health Schema
+    memory/          # MemoryCandidate 骨架，不持久化
+    api/             # API 层预留，当前不接 Web 框架
+  skills/            # 外置 Prompt 与 Skill metadata
+  prompts/           # 公共 Prompt 边界
+  scripts/           # 本地 console
+  tests/             # unittest 和测试专用 scripted provider
 ```
 
-## 当前 Harness 状态
+测试替身只允许存在于 `tests/`，产品 Bootstrap 不引用测试目录。
 
-当前是 **Interactive Single-shot Harness**，不是 ReAct，不是 Autonomous Agent。
+## 当前状态
 
 | 能力 | 状态 | 说明 |
-| --- | --- | --- |
-| 可输入 | ✅ | smoke/console 可传入自然语言、profile、goal、constraint、preference。 |
-| 可运行 | ✅ | `AgentCore`/`AgentLoop` 可运行 `INITIAL_PLANNING`。 |
-| 可追踪 | ✅ | `RunTrace` 记录 run、skill、provider、quality gate、memory candidate 等摘要。 |
-| 可保存 | ❌ | 只有 console 本地脱敏 summary 保存；没有正式 run persistence。 |
-| 可评估 | 🟡 | offline eval cases/runner 已有，仍需扩展覆盖面。 |
-| 可调用工具 | 🟡 skeleton | Tool contract/registry/executor 仅骨架，不接 shell/file/sql/DB。 |
-| 可多步决策 | ❌ | 当前不是 ReAct，也没有 structured multi-step loop。 |
-| 可沉淀记忆 | 🟡 candidate only | 只生成 `MemoryCandidate`，不确认、不持久化。 |
+|---|---|---|
+| OpenAI-compatible Provider | 已接入 | 实现 `complete_turn()`，支持普通文本、Tool Call、usage 和 metadata。 |
+| 产品 Bootstrap | 已接入 | `agent.bootstrap.create_agent_core_from_env()` 加载 `health_agent/.env` 后创建真实 Provider。 |
+| INITIAL_PLANNING | 兼容中 | 旧业务入口保留，Provider 不再解析 PlanningOutput。 |
+| Tool Call Loop | 未实现 | 当前只完成模型 Tool Call 数据结构和 Provider 转换。 |
+| Persistence / API Server | 未实现 | 不接 FastAPI、数据库、Redis 或消息队列。 |
+| Java/Python HTTP 链路 | 不可用 | 历史链路仍在仓库中，本阶段不修复。 |
 
-- `INITIAL_PLANNING` single-shot 技术链路已完成。
-- `AgentRunResult`、`RunTrace`、`PlanningQualityGate` 已接入 AgentLoop。
-- OpenAI-compatible Provider 已接入；默认仍使用 `MockProvider` 保持本地测试稳定。
-- PostgreSQL、Redis、FastAPI、Java Runtime API、正式 persistence 均未开始。
+## 配置
 
-## Harness 阶段命名
+产品入口默认读取 `health_agent/.env`。从仓库根目录或 `health_agent/` 目录运行都会解析同一个文件，且 shell 环境变量优先于 `.env`。
 
-当前项目主线仍是 Python Agent Harness，不是 ReAct，也不是完整 Autonomous Agent。
+推荐本地方式：
 
-- L0 Provider Harness：基本完成，OpenAI-compatible Provider 与 MockProvider 可用。
-- L1 Single-shot Skill Harness：技术链路完成，`INITIAL_PLANNING` 可运行到 `waiting_confirmation`。
-- L2 Trace + Eval Harness：当前阶段，目标是稳定 trace、run result、quality findings 与 offline eval cases。
-- L3 Tool Harness：未开始，仅有 skeleton。
-- L4 Structured ReAct Loop Harness：未开始。
-- L5 Memory Harness：未完成，当前只有 MemoryCandidate。
-- L6 Autonomy Policy：未开始。
+```bash
+cd health_agent
+cp .env.example .env
+```
 
-## Quick Start
+然后编辑 `health_agent/.env`：
+
+```dotenv
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=replace-with-your-api-key
+LLM_MODEL=your-model-name
+LLM_TIMEOUT_SECONDS=60
+```
+
+也可以使用 shell 环境变量：
+
+```bash
+export LLM_BASE_URL="https://api.example.com/v1"
+export LLM_API_KEY="replace-with-your-api-key"
+export LLM_MODEL="your-model-name"
+export LLM_TIMEOUT_SECONDS="60"
+```
+
+缺少 `LLM_BASE_URL`、`LLM_API_KEY` 或 `LLM_MODEL` 时，Bootstrap 会明确失败。
+
+```bash
+REBOOT_HEALTH_AGENT_DEBUG_TRACE=false
+```
+
+诊断日志默认不输出完整 prompt、完整健康原文、完整模型响应或 API key。
+
+## 验证
 
 ```bash
 cd health_agent
@@ -81,103 +95,24 @@ python3 -m compileall agent tests
 python3 -m unittest discover -s tests
 ```
 
-Smoke run：
+真实 LLM 集成测试位于 `tests/integration/test_real_llm_provider.py`。只有显式设置 `RUN_LLM_INTEGRATION=1`、`LLM_BASE_URL`、`LLM_API_KEY` 和 `LLM_MODEL` 时才会调用真实 LLM；默认会 skip。
 
-```bash
-cd health_agent
-python3 scripts/smoke_initial_planning.py
-```
-
-Interactive console：
-
-```bash
-cd health_agent
-python3 scripts/agent_console.py
-```
-
-Offline eval：
-
-```bash
-cd health_agent
-python3 scripts/eval_initial_planning.py
-```
-
-或：
+## 本地入口
 
 ```bash
 cd health_agent
 python3 -m agent.main
+python3 scripts/agent_console.py --user-text "想从低强度恢复训练"
 ```
 
-## 诊断运行模式
-
-诊断配置从 `.env` 或 shell 环境读取；CLI 参数只作为本次 smoke 的显式覆盖。
-优先级为：
-
-```text
-CLI 参数 > 环境变量 > 安全默认值
-```
-
-安全默认值：
-
-```bash
-REBOOT_HEALTH_MODEL_DEBUG_LOG=false
-REBOOT_HEALTH_MODEL_LOG_REQUEST=none
-REBOOT_HEALTH_MODEL_LOG_RESPONSE=none
-REBOOT_HEALTH_AGENT_DEBUG_TRACE=false
-```
-
-### normal
-
-默认模式只输出脱敏摘要，不打印 trace、prompt、用户原文或模型返回正文。
-
-```bash
-cd health_agent
-python3 scripts/smoke_initial_planning.py
-```
-
-### trace
-
-用于查看本次 AgentRun 的脱敏 trace。`--print-trace` 只控制 stdout 是否包含
-trace；`REBOOT_HEALTH_AGENT_DEBUG_TRACE=true` 控制 Skill 阶段诊断日志。
-
-```bash
-cd health_agent
-REBOOT_HEALTH_AGENT_DEBUG_TRACE=true \
-python3 scripts/smoke_initial_planning.py --print-trace
-```
-
-### deep-debug
-
-用于真实 OpenAI-compatible Provider 排查。`--model-debug-log` 只打开 provider
-shape 级别日志，不会自动打印 request/response 正文。模型请求和返回正文只能通过
-环境变量显式打开：
-
-```bash
-cd health_agent
-REBOOT_HEALTH_AGENT_PROVIDER=openai-compatible \
-REBOOT_HEALTH_MODEL_DEBUG_LOG=true \
-REBOOT_HEALTH_MODEL_LOG_REQUEST=preview \
-REBOOT_HEALTH_MODEL_LOG_RESPONSE=preview \
-REBOOT_HEALTH_AGENT_DEBUG_TRACE=true \
-python3 scripts/smoke_initial_planning.py --print-draft-summary --print-trace --model-debug-log
-```
-
-`REBOOT_HEALTH_MODEL_LOG_REQUEST` 和 `REBOOT_HEALTH_MODEL_LOG_RESPONSE` 支持
-`none|preview|raw`。`raw` 只用于本地临时诊断，可能打印完整 prompt 或模型返回正文。
-
-OpenAI-compatible Provider 只实现 OpenAI Chat Completions 兼容协议。OpenAI-compatible
-endpoint 与 Anthropic-compatible endpoint 不是同一个协议；MiniMax/Hermes 中某个
-base URL 可用，不代表当前 Provider 的 payload、response_format 或响应格式一定兼容。
-超时可通过 `REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS` 配置，或在 smoke 中用
-`--model-timeout-seconds` 临时覆盖；smoke/console 诊断日志不得打印 API key、完整
-prompt、完整健康原文或完整 raw response，除非本地显式使用 `raw`。
+这些入口都会使用产品 Bootstrap。没有模型环境变量时会失败，不会使用测试替身。
 
 ## 边界
 
 - 不做医学诊断，不替代医生意见。
 - 不开放 shell tool、任意文件系统 tool 或任意 SQL tool。
 - 不把模型输出写成已保存、已确认、已发布或已生效。
-- 不记录完整健康原文、认证信息或无关敏感上下文。
+- 不记录完整健康原文、认证信息、API key、完整 prompt 或完整 raw response。
+- 当前不实现 FastAPI、数据库、完整 Safety、Confirmation Resume、Memory 或 Plan 发布。
 
 详细规则见 [`AGENTS.md`](AGENTS.md)。

@@ -1,3 +1,3 @@
-# Runtime dependency for the OpenAI-compatible provider. MockProvider remains
-# the default path and ordinary unit tests inject a fake SDK client.
+# Runtime dependency for the OpenAI-compatible provider.
 openai>=1.0.0,<2.0.0
+python-dotenv>=1.0.0,<2.0.0

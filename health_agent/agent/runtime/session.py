@@ -2,7 +2,7 @@
 
 Session 只记录 Python Runtime 内部运行状态，不保存确认事实，也不替代 Java
 Domain Kernel 的会话、确认和审计权威。当前实现只提供内存存储，便于 AgentLoop
-在一次测试或本地 smoke run 中具备 Session 能力。
+在一次测试或本地运行中具备 Session 能力。
 """
 
 from __future__ import annotations

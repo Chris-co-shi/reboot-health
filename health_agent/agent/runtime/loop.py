@@ -12,8 +12,7 @@ from typing import Any, Mapping
 
 from agent.memory.candidate import MemoryCandidate
 from agent.memory.manager import MemoryCandidateBuilder
-from agent.models.base import ProviderResponseError
-from agent.models.mock import MockProvider
+from agent.models import ModelProvider, ProviderResponseError
 from agent.runtime.context import ContextBuilder
 from agent.runtime.result import AgentRunError, AgentRunResult
 from agent.runtime.session import AgentSession, InMemorySessionStore
@@ -86,10 +85,10 @@ class AgentLoop:
         self.last_memory_candidates: tuple[MemoryCandidate, ...] = ()
 
     @classmethod
-    def default(cls, provider: Any | None = None, limits: LoopLimits | None = None) -> "AgentLoop":
-        """创建只注册 INITIAL_PLANNING 的默认循环。"""
+    def default(cls, provider: ModelProvider, limits: LoopLimits | None = None) -> "AgentLoop":
+        """创建只注册 INITIAL_PLANNING 兼容 Skill 的循环。"""
         registry = SkillRegistry()
-        registry.register(InitialPlanningSkill(provider=provider or MockProvider()))
+        registry.register(InitialPlanningSkill(provider=provider))
         return cls(skill_registry=registry, limits=limits)
 
     def run(

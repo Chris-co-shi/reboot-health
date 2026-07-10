@@ -1,7 +1,7 @@
 """Context Builder。
 
 Context Builder 只组装当前任务必要上下文，不加载数据库、Redis、文件系统或完整
-聊天历史。M2.5-B-3 只使用请求输入和 Mock 已知上下文，保证 INITIAL_PLANNING
+聊天历史。当前兼容阶段只使用请求输入和显式已知上下文，保证 INITIAL_PLANNING
 行为不被额外上下文改变。
 """
 

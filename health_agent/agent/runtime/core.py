@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agent.models.mock import MockProvider
+from agent.models import ModelProvider
 from agent.runtime.loop import AgentLoop
 from agent.runtime.result import AgentRunResult
 from agent.skills.initial_planning import InitialPlanningSkill
@@ -31,14 +31,13 @@ class AgentCore:
         self.last_loop: AgentLoop | None = None
 
     @classmethod
-    def default(cls, provider: Any | None = None) -> "AgentCore":
-        """创建当前阶段默认 Core。
+    def default(cls, provider: ModelProvider) -> "AgentCore":
+        """创建只注册 INITIAL_PLANNING 兼容 Skill 的 Core。
 
-        默认只注册 INITIAL_PLANNING，Provider 默认为 MockProvider，保证本地测试
-        不依赖真实模型、网络或外部凭据。
+        Provider 必须由调用方或产品 Bootstrap 注入，Core 不自行创建模型实现。
         """
         registry = SkillRegistry()
-        registry.register(InitialPlanningSkill(provider=provider or MockProvider()))
+        registry.register(InitialPlanningSkill(provider=provider))
         return cls(registry=registry)
 
     def run(

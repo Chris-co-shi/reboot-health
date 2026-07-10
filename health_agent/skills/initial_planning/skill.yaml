@@ -3,7 +3,7 @@ trigger: INITIAL_PLANNING
 version: health-agent.initial-planning.v0
 locale: zh-CN
 status: implemented
-provider_default: mock
+provider_default: openai-compatible
 requires_user_confirmation: true
 description: >
   Generate understanding candidates, health constraint candidates, goal

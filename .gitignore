@@ -4,6 +4,8 @@
 
 # Local environment
 .env
+.env.*
+!.env.example
 deploy/.env
 
 # Java / Maven

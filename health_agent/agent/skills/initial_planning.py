@@ -15,8 +15,12 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from agent.models.base import BaseModelProvider
-from agent.models.mock import MockProvider
+from agent.models import (
+    ModelMessage,
+    ModelOptions,
+    ModelProvider,
+    ProviderResponseError,
+)
 from agent.safety.rules import FORBIDDEN_BUSINESS_FACT_CLAIMS
 from agent.schemas.planning import (
     PLANNING_SCHEMA_VERSION,
@@ -31,13 +35,17 @@ LOGGER = logging.getLogger(__name__)
 
 
 class InitialPlanningSkill:
-    """首轮规划 Skill，负责生成 INITIAL_PLANNING v0 草案。"""
+    """首轮规划兼容 Skill，负责生成 INITIAL_PLANNING v0 草案。
+
+    这是通用 Model Turn Contract 落地期间的临时迁移层；Provider 不再理解
+    INITIAL_PLANNING，本 Skill 负责旧 prompt/input/output 的兼容转换。
+    """
 
     trigger = "INITIAL_PLANNING"
 
-    def __init__(self, provider: BaseModelProvider | None = None) -> None:
-        """创建 Skill，并默认使用 MockProvider 保持本地可测。"""
-        self.provider = provider or MockProvider()
+    def __init__(self, provider: ModelProvider) -> None:
+        """创建 Skill；Provider 必须由产品 Bootstrap 或测试显式注入。"""
+        self.provider = provider
         self.last_trace_steps: list[dict[str, Any]] = []
 
     def run(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -64,10 +72,26 @@ class InitialPlanningSkill:
         )
 
         provider_started = time.monotonic()
-        provider_output = self.provider.generate_initial_planning(
-            prompt,
-            provider_payload,
+        model_response = self.provider.complete_turn(
+            messages=(
+                ModelMessage(role="system", content=prompt),
+                ModelMessage(
+                    role="user",
+                    content=json.dumps(provider_payload, ensure_ascii=False),
+                ),
+            ),
+            tools=(),
+            options=ModelOptions(temperature=0.2),
         )
+        if model_response.tool_calls:
+            raise ProviderResponseError(
+                "INITIAL_PLANNING compatibility layer does not support model tool calls",
+                code="tool_calls_not_supported",
+                safe_summary=(
+                    "INITIAL_PLANNING compatibility layer does not support model tool calls"
+                ),
+            )
+        provider_output = _parse_model_json_content(model_response.content)
         provider_elapsed_ms = _elapsed_ms(provider_started)
         provider_meta = _provider_trace_metadata(self.provider)
         self._record_trace_step(
@@ -295,6 +319,57 @@ def _prompt_path() -> Path:
     )
 
 
+def _parse_model_json_content(content: str | None) -> Mapping[str, Any]:
+    """从通用 ModelResponse.content 中解析 INITIAL_PLANNING JSON 对象。"""
+    if not str(content or "").strip():
+        raise ProviderResponseError(
+            "INITIAL_PLANNING model response content is empty",
+            code="invalid_json",
+            safe_summary="INITIAL_PLANNING model response content is empty",
+        )
+    try:
+        parsed = _extract_json_object(str(content))
+    except (TypeError, json.JSONDecodeError, ValueError) as exc:
+        raise ProviderResponseError(
+            "INITIAL_PLANNING model response content is not a valid JSON object",
+            code="invalid_json",
+            safe_summary="INITIAL_PLANNING model response content is not a valid JSON object",
+        ) from exc
+    return parsed
+
+
+def _extract_json_object(text: str) -> Mapping[str, Any]:
+    """提取模型文本中的第一个 JSON object。"""
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("No JSON object found")
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                parsed = json.loads(text[start : index + 1])
+                if not isinstance(parsed, Mapping):
+                    raise ValueError("JSON value must be an object")
+                return dict(parsed)
+    raise ValueError("No complete JSON object found")
+
+
 def _debug_trace(event: str, **fields: Any) -> None:
     """按环境开关输出 Skill 阶段诊断日志。"""
     if not _debug_trace_enabled():
@@ -338,7 +413,7 @@ def _field_type(value: Any, key: str) -> str:
     return type(value.get(key)).__name__
 
 
-def _provider_trace_metadata(provider: BaseModelProvider) -> dict[str, Any]:
+def _provider_trace_metadata(provider: ModelProvider) -> dict[str, Any]:
     """返回 Provider 的非敏感 trace 元数据。"""
     provider_name = getattr(provider, "provider_name", None) or "unknown"
     model = getattr(provider, "model", None) or provider_name
@@ -349,7 +424,7 @@ def _provider_trace_metadata(provider: BaseModelProvider) -> dict[str, Any]:
 
 
 def _provider_payload_bytes(
-    provider: BaseModelProvider,
+    provider: ModelProvider,
     provider_payload: Mapping[str, Any],
 ) -> int:
     """读取 Provider request payload 字节数；没有原生 shape 时用输入摘要估算。"""

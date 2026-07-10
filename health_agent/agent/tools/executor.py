@@ -24,9 +24,9 @@ class ToolExecutor:
             raise KeyError(f"Unsupported tool: {name}")
         call = ToolCall(name=definition.name, payload=dict(payload or {}))
         if definition.handler is not None:
-            if definition.risk_level != "mock":
+            if definition.risk_level != "test":
                 raise PermissionError(
-                    "Only mock tool handlers are allowed in M2.5-B"
+                    "Only test tool handlers are allowed before Tool Runtime is implemented"
                 )
             return definition.handler(call)
         return ToolResult(

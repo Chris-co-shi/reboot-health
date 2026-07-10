@@ -1,20 +1,16 @@
-"""OpenAI-compatible Provider 实现。
+"""OpenAI-compatible Chat Completions Provider。
 
-该实现是当前唯一允许的真实模型接入路径。它通过官方 openai Python SDK 调用
-OpenAI-compatible Chat Completions API，并把返回 content 解析为 JSON-like 对象；
-所有健康事实确认、安全规则和计划发布边界仍由 Skill/Schema 以及 Java Domain
-Kernel 后续流程负责。
+Provider 只负责调用模型并把 Chat Completions 响应转换为通用 ModelResponse。
+它不理解 INITIAL_PLANNING、Program、Phase、WeeklyPlan 或 TodayAction。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import time
-from dataclasses import dataclass
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping, Sequence
 
 from openai import (
     APIConnectionError,
@@ -25,108 +21,49 @@ from openai import (
     RateLimitError,
 )
 
+from agent.config import LLMSettings
 from agent.models.base import (
-    BaseModelProvider,
+    ModelMessage,
+    ModelOptions,
+    ModelProvider,
+    ModelResponse,
+    ModelToolCall,
+    ModelToolDefinition,
+    ModelUsage,
     ProviderConfigurationError,
     ProviderResponseError,
+    mutable_mapping,
 )
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class _ProviderSDKResponse:
-    """SDK 调用结果，只保留诊断所需的非敏感元数据。"""
-
-    content: Any
-    elapsed_ms: int
-    payload_bytes: int
-
-
-class OpenAICompatibleProvider(BaseModelProvider):
-    """从环境变量配置的 OpenAI-compatible Chat Completions Provider。"""
+class OpenAICompatibleProvider(ModelProvider):
+    """由已验证 settings 配置的 OpenAI-compatible Provider。"""
 
     provider_name = "openai-compatible"
 
-    BASE_URL_ENV = "REBOOT_HEALTH_MODEL_BASE_URL"
-    API_KEY_ENV = "REBOOT_HEALTH_MODEL_API_KEY"
-    MODEL_ENV = "REBOOT_HEALTH_MODEL_NAME"
-    TIMEOUT_ENV = "REBOOT_HEALTH_MODEL_TIMEOUT_SECONDS"
-    DEBUG_LOG_ENV = "REBOOT_HEALTH_MODEL_DEBUG_LOG"
-    RESPONSE_FORMAT_ENV = "REBOOT_HEALTH_MODEL_RESPONSE_FORMAT"
-    LOG_REQUEST_ENV = "REBOOT_HEALTH_MODEL_LOG_REQUEST"
-    LOG_RESPONSE_ENV = "REBOOT_HEALTH_MODEL_LOG_RESPONSE"
-
-    LEGACY_BASE_URL_ENV = "AGENT_OPENAI_BASE_URL"
-    LEGACY_API_KEY_ENV = "AGENT_OPENAI_API_KEY"
-    LEGACY_MODEL_ENV = "AGENT_OPENAI_MODEL"
-    LEGACY_TIMEOUT_ENV = "AGENT_OPENAI_TIMEOUT_SECONDS"
-    LEGACY_DEBUG_LOG_ENV = "AGENT_OPENAI_DEBUG_LOG"
-    LEGACY_RESPONSE_FORMAT_ENV = "AGENT_OPENAI_RESPONSE_FORMAT"
-    LEGACY_LOG_REQUEST_ENV = "AGENT_OPENAI_LOG_REQUEST"
-    LEGACY_LOG_RESPONSE_ENV = "AGENT_OPENAI_LOG_RESPONSE"
-
     def __init__(
         self,
-        env: Mapping[str, str] | None = None,
-        debug_log: bool | None = None,
+        settings: LLMSettings,
+        *,
+        debug_log: bool = False,
+        response_format: str | None = None,
+        log_request: str | None = None,
+        log_response: str | None = None,
         client: Any | None = None,
-        client_factory: Callable[..., Any] | None = None,
+        client_factory: Any | None = None,
     ) -> None:
-        """读取 Provider 配置并创建 OpenAI SDK client。
-
-        `env` 允许测试传入隔离字典；`client`/`client_factory` 用于单元测试注入，
-        避免普通 unittest 访问真实网络。API Key 只保存在实例私有字段中，`repr`
-        会主动打码。
-        """
-        source = os.environ if env is None else env
-        self.base_url = _read_base_url(
-            source,
-            self.BASE_URL_ENV,
-            self.LEGACY_BASE_URL_ENV,
-        )
-        self._api_key = _read_required(
-            source,
-            self.API_KEY_ENV,
-            self.LEGACY_API_KEY_ENV,
-        )
-        self.model = _read_required(
-            source,
-            self.MODEL_ENV,
-            self.LEGACY_MODEL_ENV,
-        )
-        self.timeout = _read_timeout(
-            _read_optional(source, self.TIMEOUT_ENV, self.LEGACY_TIMEOUT_ENV)
-        )
-        self.response_format = _read_response_format(
-            _read_optional(
-                source,
-                self.RESPONSE_FORMAT_ENV,
-                self.LEGACY_RESPONSE_FORMAT_ENV,
-            )
-        )
-        self.log_request = _read_log_payload(
-            _read_optional(
-                source,
-                self.LOG_REQUEST_ENV,
-                self.LEGACY_LOG_REQUEST_ENV,
-            )
-        )
-        self.log_response = _read_log_response(
-            _read_optional(
-                source,
-                self.LOG_RESPONSE_ENV,
-                self.LEGACY_LOG_RESPONSE_ENV,
-            )
-        )
-        self.debug_log = (
-            _read_bool(
-                _read_optional(source, self.DEBUG_LOG_ENV, self.LEGACY_DEBUG_LOG_ENV)
-            )
-            if debug_log is None
-            else bool(debug_log)
-        )
+        self.settings = settings
+        self.base_url = settings.base_url
+        self._api_key = settings.api_key
+        self.model = settings.model
+        self.timeout = settings.timeout_seconds
+        self.response_format = _read_response_format(response_format)
+        self.log_request = _read_log_payload(log_request)
+        self.log_response = _read_log_payload(log_response)
+        self.debug_log = bool(debug_log)
         self.last_request_shape: dict[str, Any] | None = None
         factory = client_factory or OpenAI
         self._client = client or factory(
@@ -136,77 +73,22 @@ class OpenAICompatibleProvider(BaseModelProvider):
             max_retries=0,
         )
 
-    def generate_initial_planning(
+    def complete_turn(
         self,
-        prompt: str,
-        planning_input: Mapping[str, Any],
-    ) -> Mapping[str, Any]:
-        """调用 OpenAI-compatible 接口并解析 JSON 对象结果。"""
-        return self.generate_json(prompt, planning_input, temperature=0.2)
-
-    def generate_json(
-        self,
-        system_prompt: str,
-        user_payload: Mapping[str, Any],
-        temperature: float = 0.2,
-    ) -> Mapping[str, Any]:
-        """发送一次 JSON-oriented chat completion 并返回 JSON object。"""
-        user_content = json.dumps(user_payload, ensure_ascii=False)
-        response = self._send_chat_completion(
-            system_prompt=system_prompt,
-            user_content=user_content,
-            temperature=temperature,
-        )
-        return self._parse_model_content(response.content, response.elapsed_ms)
-
-    def ping(self) -> Mapping[str, Any]:
-        """发送极简 provider ping，用于排查 endpoint/model/key 基础链路。"""
-        response = self._send_chat_completion(
-            system_prompt='Return exactly this JSON object: {"ok": true}',
-            user_content='{"ping": true}',
-            temperature=0.0,
-        )
-        parsed = self._parse_model_content(response.content, response.elapsed_ms)
-        if parsed.get("ok") is not True:
-            raise ProviderResponseError(
-                "OpenAI-compatible provider ping returned unexpected content",
-                code="provider_response_error",
-                safe_summary="OpenAI-compatible provider ping returned unexpected content",
-            )
-        return {
-            "ok": True,
-            "elapsedMs": response.elapsed_ms,
-            "payloadBytes": response.payload_bytes,
-            "responseFormat": self.response_format,
-        }
-
-    def _send_chat_completion(
-        self,
-        system_prompt: str,
-        user_content: str,
-        temperature: float,
-    ) -> _ProviderSDKResponse:
-        """执行一次 SDK Chat Completions 请求，并只记录脱敏 request shape。"""
-        request_kwargs = self._build_chat_kwargs(
-            system_prompt=system_prompt,
-            user_content=user_content,
-            temperature=temperature,
-        )
+        messages: Sequence[ModelMessage],
+        tools: Sequence[ModelToolDefinition] = (),
+        options: ModelOptions | None = None,
+    ) -> ModelResponse:
+        """执行一次 Chat Completions 模型回合。"""
+        request_kwargs = self._build_chat_kwargs(messages, tools, options or ModelOptions())
         payload_bytes = len(
             json.dumps(request_kwargs, ensure_ascii=False, default=str).encode("utf-8")
         )
-        request_shape = self._request_shape(
-            request_kwargs=request_kwargs,
-            payload_bytes=payload_bytes,
-        )
+        request_shape = self._request_shape(request_kwargs, payload_bytes)
         self.last_request_shape = dict(request_shape)
         self._log_request_built(request_kwargs)
         started = time.monotonic()
-        self._log_debug(
-            "request_start",
-            timeoutSeconds=self.timeout,
-            **request_shape,
-        )
+        self._log_debug("request_start", timeoutSeconds=self.timeout, **request_shape)
 
         try:
             completion = self._client.chat.completions.create(**request_kwargs)
@@ -214,7 +96,7 @@ class OpenAICompatibleProvider(BaseModelProvider):
             self._raise_sdk_error(
                 exc,
                 code="timeout",
-                safe_summary="OpenAI SDK request timed out",
+                safe_summary="OpenAI-compatible provider request timed out",
                 elapsed_ms=_elapsed_ms(started),
             )
         except RateLimitError as exc:
@@ -247,60 +129,110 @@ class OpenAICompatibleProvider(BaseModelProvider):
             )
 
         elapsed_ms = _elapsed_ms(started)
-        content = _completion_content(completion)
-        self._log_response_content(content)
+        response = self._to_model_response(completion, elapsed_ms, payload_bytes)
+        self._log_response_content(response.content)
         self._log_debug(
             "response_read",
             elapsedMs=elapsed_ms,
-            contentChars=_content_chars(content),
-            requestId=_completion_request_id(completion),
+            contentChars=len(response.content or ""),
+            toolCallCount=len(response.tool_calls),
+            finishReason=response.finish_reason,
+            requestId=response.provider_metadata.get("requestId"),
         )
-        return _ProviderSDKResponse(
-            content=content,
-            elapsed_ms=elapsed_ms,
-            payload_bytes=payload_bytes,
+        return response
+
+    def ping(self) -> Mapping[str, Any]:
+        """发送极简模型调用，用于验证 Provider 基础链路。"""
+        response = self.complete_turn(
+            messages=(
+                ModelMessage(role="system", content="Return exactly: ok"),
+                ModelMessage(role="user", content="ping"),
+            ),
+            options=ModelOptions(temperature=0.0),
         )
+        if not (response.content or "").strip():
+            raise ProviderResponseError(
+                "OpenAI-compatible provider ping returned empty content",
+                code="provider_response_error",
+                safe_summary="OpenAI-compatible provider ping returned empty content",
+            )
+        return {
+            "ok": True,
+            "finishReason": response.finish_reason,
+            "usage": response.usage,
+            "providerMetadata": response.provider_metadata,
+        }
 
     def _build_chat_kwargs(
         self,
-        system_prompt: str,
-        user_content: str,
-        temperature: float,
+        messages: Sequence[ModelMessage],
+        tools: Sequence[ModelToolDefinition],
+        options: ModelOptions,
     ) -> dict[str, Any]:
-        """生成 OpenAI SDK Chat Completions 参数。"""
+        if not messages:
+            raise ProviderResponseError(
+                "Model turn requires at least one message",
+                code="invalid_request",
+                safe_summary="Model turn requires at least one message",
+            )
         request_kwargs: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-            "temperature": temperature,
+            "messages": [_message_to_openai(message) for message in messages],
         }
-        if self.response_format == "json_object":
+        if options.temperature is not None:
+            request_kwargs["temperature"] = options.temperature
+        if options.max_tokens is not None:
+            request_kwargs["max_tokens"] = options.max_tokens
+        response_format = options.response_format or self.response_format
+        if response_format == "json_object":
             request_kwargs["response_format"] = {"type": "json_object"}
+        if tools:
+            request_kwargs["tools"] = [_tool_to_openai(tool) for tool in tools]
         return request_kwargs
+
+    def _to_model_response(
+        self,
+        completion: Any,
+        elapsed_ms: int,
+        payload_bytes: int,
+    ) -> ModelResponse:
+        choice = _first_choice(completion)
+        message = _value(choice, "message")
+        if message is None:
+            raise ProviderResponseError(
+                "OpenAI-compatible provider returned no assistant message",
+                code="provider_response_error",
+                safe_summary="OpenAI-compatible provider returned no assistant message",
+            )
+        content = _content_text(_value(message, "content"))
+        tool_calls = tuple(_parse_tool_calls(_value(message, "tool_calls")))
+        return ModelResponse(
+            content=content,
+            tool_calls=tool_calls,
+            finish_reason=str(_value(choice, "finish_reason") or "unknown"),
+            usage=_parse_usage(_value(completion, "usage")),
+            provider_metadata={
+                "provider": self.provider_name,
+                "model": _value(completion, "model") or self.model,
+                "requestId": _completion_request_id(completion),
+                "elapsedMs": elapsed_ms,
+                "payloadBytes": payload_bytes,
+                "endpoint": self._chat_completions_endpoint(),
+            },
+        )
 
     def _request_shape(
         self,
         request_kwargs: Mapping[str, Any],
         payload_bytes: int,
     ) -> dict[str, Any]:
-        """返回脱敏 request shape，不包含 prompt、用户原文、header 或密钥。"""
         messages = request_kwargs.get("messages")
         message_items = messages if isinstance(messages, list) else []
-        system_prompt_chars = 0
-        user_content_chars = 0
-        if message_items:
-            first = message_items[0]
-            if isinstance(first, Mapping):
-                system_prompt_chars = len(str(first.get("content") or ""))
-            second = message_items[1] if len(message_items) > 1 else None
-            if isinstance(second, Mapping):
-                user_content_chars = len(str(second.get("content") or ""))
+        tool_items = request_kwargs.get("tools")
         response_format = request_kwargs.get("response_format")
-        response_format_type = None
-        if isinstance(response_format, Mapping):
-            response_format_type = response_format.get("type")
+        response_format_type = (
+            response_format.get("type") if isinstance(response_format, Mapping) else None
+        )
         return {
             "endpoint": self._chat_completions_endpoint(),
             "model": request_kwargs.get("model"),
@@ -308,54 +240,12 @@ class OpenAICompatibleProvider(BaseModelProvider):
             "responseFormatMode": self.response_format,
             "responseFormatPresent": "response_format" in request_kwargs,
             "responseFormatType": response_format_type,
-            "stream": request_kwargs.get("stream"),
-            "maxTokens": request_kwargs.get("max_tokens"),
             "messageCount": len(message_items),
-            "systemPromptChars": system_prompt_chars,
-            "userContentChars": user_content_chars,
+            "toolCount": len(tool_items) if isinstance(tool_items, list) else 0,
             "payloadBytes": payload_bytes,
         }
 
-    def _parse_model_content(
-        self,
-        content: Any,
-        elapsed_ms: int,
-    ) -> Mapping[str, Any]:
-        """解析 SDK message content 为 JSON object。"""
-        try:
-            if isinstance(content, Mapping):
-                parsed = dict(content)
-            else:
-                parsed = extract_json_object(str(content))
-        except (TypeError, json.JSONDecodeError, ValueError) as exc:
-            self._log_debug(
-                "response_invalid_json",
-                code="invalid_json",
-                elapsedMs=elapsed_ms,
-                errorType=type(exc).__name__,
-                contentChars=_content_chars(content),
-            )
-            raise ProviderResponseError(
-                "OpenAI-compatible provider returned invalid JSON content",
-                code="invalid_json",
-                safe_summary="OpenAI-compatible provider returned invalid JSON content",
-            ) from exc
-        self._log_debug(
-            "response_parsed",
-            elapsedMs=elapsed_ms,
-            contentType="json_object",
-            topLevelKeys=sorted(str(key) for key in parsed.keys()),
-        )
-        self._log_debug(
-            "provider_json_parsed",
-            elapsedMs=elapsed_ms,
-            topLevelKeys=sorted(str(key) for key in parsed.keys()),
-            fieldTypes=_field_types(parsed),
-        )
-        return parsed
-
     def _chat_completions_endpoint(self) -> str:
-        """返回仅用于诊断展示的 endpoint；实际请求由 SDK base_url 管理。"""
         return f"{self.base_url.rstrip('/')}/chat/completions"
 
     def _raise_sdk_error(
@@ -365,7 +255,10 @@ class OpenAICompatibleProvider(BaseModelProvider):
         safe_summary: str,
         elapsed_ms: int,
     ) -> None:
-        """把 SDK 异常统一包装为 ProviderResponseError。"""
+        safe_summary = _redact_sensitive_text(
+            safe_summary,
+            extra_secrets=(self._api_key,),
+        )
         self._log_debug(
             "request_sdk_error",
             code=code,
@@ -380,15 +273,12 @@ class OpenAICompatibleProvider(BaseModelProvider):
         ) from exc
 
     def __repr__(self) -> str:
-        """返回不会泄漏 API Key 的调试表示。"""
         return (
             "OpenAICompatibleProvider("
-            f"base_url={self.base_url!r}, model={self.model!r}, "
-            f"response_format={self.response_format!r}, api_key=<redacted>)"
+            f"base_url={self.base_url!r}, model={self.model!r}, api_key=<redacted>)"
         )
 
     def _log_debug(self, event: str, **fields: Any) -> None:
-        """输出安全诊断日志；不包含 API key、prompt、健康原文或响应正文。"""
         if not self.debug_log:
             return
         payload = {
@@ -402,62 +292,36 @@ class OpenAICompatibleProvider(BaseModelProvider):
         )
 
     def _log_request_built(self, request_kwargs: Mapping[str, Any]) -> None:
-        """按显式开关输出请求正文诊断，默认不输出 prompt/user content。"""
         messages = request_kwargs.get("messages")
         message_items = messages if isinstance(messages, list) else []
-        system_prompt = ""
-        user_content = ""
-        if message_items:
-            first = message_items[0]
-            if isinstance(first, Mapping):
-                system_prompt = str(first.get("content") or "")
-            second = message_items[1] if len(message_items) > 1 else None
-            if isinstance(second, Mapping):
-                user_content = str(second.get("content") or "")
         payload: dict[str, Any] = {
             "mode": self.log_request,
             "model": request_kwargs.get("model"),
-            "temperature": request_kwargs.get("temperature"),
             "messageCount": len(message_items),
+            "toolCount": len(request_kwargs.get("tools") or []),
             "responseFormatPresent": "response_format" in request_kwargs,
         }
         if self.log_request == "none":
             self._log_debug("provider_request_built", **payload)
             return
-        safe_system = _redact_sensitive_text(
-            system_prompt,
-            extra_secrets=(self._api_key,),
-            collapse_whitespace=False,
-        )
-        safe_user = _redact_sensitive_text(
-            user_content,
-            extra_secrets=(self._api_key,),
-            collapse_whitespace=False,
-        )
+        text = json.dumps(message_items, ensure_ascii=False, default=str)
+        safe_text = _redact_sensitive_text(text, extra_secrets=(self._api_key,))
         if self.log_request == "raw":
-            payload["systemPromptRaw"] = safe_system
-            payload["userContentRaw"] = safe_user
+            payload["messagesRaw"] = safe_text
         else:
-            payload["systemPromptPreview"] = safe_system[:2000]
-            payload["userContentPreview"] = safe_user[:2000]
+            payload["messagesPreview"] = safe_text[:2000]
         self._log_debug("provider_request_built", **payload)
 
-    def _log_response_content(self, content: Any) -> None:
-        """按显式开关输出模型返回正文诊断，默认不输出正文。"""
-        text = _content_text(content)
+    def _log_response_content(self, content: str | None) -> None:
+        text = content or ""
         payload: dict[str, Any] = {
             "mode": self.log_response,
-            "contentType": type(content).__name__,
             "contentChars": len(text),
         }
         if self.log_response == "none":
             self._log_debug("provider_response_raw", **payload)
             return
-        safe_text = _redact_sensitive_text(
-            text,
-            extra_secrets=(self._api_key,),
-            collapse_whitespace=False,
-        )
+        safe_text = _redact_sensitive_text(text, extra_secrets=(self._api_key,))
         if self.log_response == "raw":
             payload["contentRaw"] = safe_text
         else:
@@ -466,30 +330,135 @@ class OpenAICompatibleProvider(BaseModelProvider):
 
 
 def extract_json_object(text: str) -> Mapping[str, Any]:
-    """从模型文本中提取第一个 JSON object。
-
-    支持纯 JSON、```json 代码块，以及前后带少量解释文本的第一个 JSON object。
-    解析失败会抛出 ValueError，不静默降级。
-    """
-    candidate = _extract_fenced_json(text) or _extract_first_object(text)
+    """从模型文本中提取第一个 JSON object。"""
+    candidate = _first_json_object_text(text)
     if candidate is None:
-        raise ValueError("No JSON object found in provider content")
+        raise ValueError("No JSON object found in model content")
     parsed = json.loads(candidate)
     if not isinstance(parsed, Mapping):
-        raise ValueError("Provider content must be a JSON object")
+        raise ValueError("Model content JSON must be an object")
     return dict(parsed)
 
 
-def _extract_fenced_json(text: str) -> str | None:
-    """提取 markdown fenced code block 中的 JSON。"""
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL)
-    if not match:
+def _message_to_openai(message: ModelMessage) -> dict[str, Any]:
+    role = str(message.role).strip()
+    if not role:
+        raise ProviderResponseError(
+            "Model message role must not be empty",
+            code="invalid_request",
+            safe_summary="Model message role must not be empty",
+        )
+    result: dict[str, Any] = {"role": role}
+    if message.content is not None:
+        result["content"] = message.content
+    if message.name:
+        result["name"] = message.name
+    if message.tool_call_id:
+        result["tool_call_id"] = message.tool_call_id
+    return result
+
+
+def _tool_to_openai(tool: ModelToolDefinition) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": mutable_mapping(tool.input_schema),
+        },
+    }
+
+
+def _parse_tool_calls(raw_tool_calls: Any) -> list[ModelToolCall]:
+    if raw_tool_calls is None:
+        return []
+    if not isinstance(raw_tool_calls, list | tuple):
+        raise ProviderResponseError(
+            "OpenAI-compatible provider returned invalid tool_calls shape",
+            code="provider_response_error",
+            safe_summary="OpenAI-compatible provider returned invalid tool_calls shape",
+        )
+    parsed: list[ModelToolCall] = []
+    for index, raw_call in enumerate(raw_tool_calls):
+        function = _value(raw_call, "function") or {}
+        name = _value(function, "name") or _value(raw_call, "name")
+        raw_arguments_value = _value(function, "arguments") or _value(raw_call, "arguments")
+        raw_arguments = str(raw_arguments_value if raw_arguments_value is not None else "{}")
+        try:
+            arguments = json.loads(raw_arguments or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderResponseError(
+                "OpenAI-compatible provider returned invalid tool arguments JSON",
+                code="invalid_tool_arguments",
+                safe_summary="OpenAI-compatible provider returned invalid tool arguments JSON",
+            ) from exc
+        if not isinstance(arguments, Mapping):
+            raise ProviderResponseError(
+                "OpenAI-compatible provider tool arguments must be a JSON object",
+                code="invalid_tool_arguments",
+                safe_summary="OpenAI-compatible provider tool arguments must be a JSON object",
+            )
+        parsed.append(
+            ModelToolCall(
+                id=str(_value(raw_call, "id") or f"tool_call_{index}"),
+                name=str(name or ""),
+                raw_arguments=raw_arguments,
+                arguments=dict(arguments),
+            )
+        )
+    return parsed
+
+
+def _parse_usage(raw_usage: Any) -> ModelUsage | None:
+    if raw_usage is None:
         return None
-    return _extract_first_object(match.group(1))
+    return ModelUsage(
+        prompt_tokens=_optional_int(_value(raw_usage, "prompt_tokens")),
+        completion_tokens=_optional_int(_value(raw_usage, "completion_tokens")),
+        total_tokens=_optional_int(_value(raw_usage, "total_tokens")),
+    )
 
 
-def _extract_first_object(text: str) -> str | None:
-    """通过括号计数提取第一个完整 JSON object。"""
+def _first_choice(completion: Any) -> Any:
+    choices = _value(completion, "choices")
+    if not isinstance(choices, list | tuple) or not choices:
+        raise ProviderResponseError(
+            "OpenAI-compatible provider returned no choices",
+            code="provider_response_error",
+            safe_summary="OpenAI-compatible provider returned no choices",
+        )
+    return choices[0]
+
+
+def _value(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _content_text(content: Any) -> str | None:
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return content
+    return str(content)
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _completion_request_id(completion: Any) -> str | None:
+    request_id = _value(completion, "_request_id") or _value(completion, "request_id")
+    return str(request_id) if request_id else None
+
+
+def _first_json_object_text(text: str) -> str | None:
     start = text.find("{")
     if start < 0:
         return None
@@ -517,68 +486,7 @@ def _extract_first_object(text: str) -> str | None:
     return None
 
 
-def _read_base_url(
-    source: Mapping[str, str],
-    name: str,
-    legacy_name: str | None = None,
-) -> str:
-    """读取并校验 OpenAI SDK base_url。"""
-    value = _read_required(source, name, legacy_name).rstrip("/")
-    if value.endswith("/chat/completions"):
-        raise ProviderConfigurationError(
-            "REBOOT_HEALTH_MODEL_BASE_URL must be a base URL like "
-            "https://api.minimaxi.com/v1, not a /chat/completions endpoint"
-        )
-    return value
-
-
-def _read_required(
-    source: Mapping[str, str],
-    name: str,
-    legacy_name: str | None = None,
-) -> str:
-    """读取必填环境变量，优先新命名并兼容旧命名。"""
-    value = _read_optional(source, name, legacy_name)
-    if not value:
-        if legacy_name:
-            raise ProviderConfigurationError(
-                f"Missing environment variable: {name} (legacy fallback: {legacy_name})"
-            )
-        raise ProviderConfigurationError(f"Missing environment variable: {name}")
-    return value
-
-
-def _read_optional(
-    source: Mapping[str, str],
-    name: str,
-    legacy_name: str | None = None,
-) -> str | None:
-    """读取可选配置，优先新命名。"""
-    value = str(source.get(name) or "").strip()
-    if value:
-        return value
-    if legacy_name:
-        legacy_value = str(source.get(legacy_name) or "").strip()
-        if legacy_value:
-            return legacy_value
-    return None
-
-
-def _read_timeout(value: str | None) -> float:
-    """读取超时秒数；缺省使用保守默认值 30 秒。"""
-    if value is None or not str(value).strip():
-        return 30.0
-    try:
-        timeout = float(value)
-    except ValueError as exc:
-        raise ProviderConfigurationError("Invalid provider timeout") from exc
-    if timeout <= 0:
-        raise ProviderConfigurationError("Provider timeout must be positive")
-    return timeout
-
-
 def _read_response_format(value: str | None) -> str:
-    """读取 response_format 模式；默认不发送 response_format 字段。"""
     if value is None or not str(value).strip():
         return "none"
     normalized = str(value).strip().lower().replace("-", "_")
@@ -592,7 +500,6 @@ def _read_response_format(value: str | None) -> str:
 
 
 def _read_log_payload(value: str | None) -> str:
-    """读取请求/响应正文日志模式；默认不输出正文。"""
     if value is None or not str(value).strip():
         return "none"
     normalized = str(value).strip().lower()
@@ -605,146 +512,44 @@ def _read_log_payload(value: str | None) -> str:
     )
 
 
-def _read_log_response(value: str | None) -> str:
-    """读取模型响应正文日志模式；默认不输出正文。"""
-    return _read_log_payload(value)
-
-
-def _read_bool(value: str | None) -> bool:
-    """读取布尔开关。"""
-    if value is None:
-        return False
-    return str(value).strip().lower() in ("1", "true", "yes", "on", "debug")
-
-
-def _completion_content(completion: Any) -> Any:
-    """从 OpenAI SDK completion 中提取 choices[0].message.content。"""
-    try:
-        return completion.choices[0].message.content
-    except (AttributeError, IndexError, TypeError) as exc:
-        raise ProviderResponseError(
-            "OpenAI SDK completion response missing choices[0].message.content",
-            code="invalid_json",
-            safe_summary=(
-                "OpenAI SDK completion response missing "
-                "choices[0].message.content"
-            ),
-        ) from exc
-
-
-def _completion_request_id(completion: Any) -> str | None:
-    """读取 SDK response request id；没有则返回 None。"""
-    value = getattr(completion, "_request_id", None)
-    return str(value) if value else None
-
-
-def _content_chars(content: Any) -> int:
-    """返回 content 字符长度，不记录 content 本文。"""
-    if content is None:
-        return 0
-    if isinstance(content, str):
-        return len(content)
-    return len(json.dumps(content, ensure_ascii=False, default=str))
-
-
-def _content_text(content: Any) -> str:
-    """把模型 content 转成诊断文本。"""
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    return json.dumps(content, ensure_ascii=False, default=str)
-
-
 def _elapsed_ms(started: float) -> int:
-    """返回从 started 到当前的毫秒数。"""
-    return max(0, int((time.monotonic() - started) * 1000))
+    return int((time.monotonic() - started) * 1000)
 
 
 def _sdk_error_summary(exc: Exception) -> str:
-    """返回不含 header/key/body 的 SDK 错误摘要。"""
-    status_code = getattr(exc, "status_code", None)
-    request_id = getattr(exc, "request_id", None)
-    parts = [f"OpenAI SDK error: {type(exc).__name__}"]
-    if status_code:
-        parts.append(f"status={status_code}")
-    if request_id:
-        parts.append(f"request_id={request_id}")
-    return _redact_sensitive_text(", ".join(parts))
-
-
-def _field_types(value: Mapping[str, Any]) -> dict[str, str]:
-    """返回顶层字段的 Python 类型名称。"""
-    return {str(key): type(item).__name__ for key, item in value.items()}
+    text = str(exc).strip()
+    return text[:300] if text else type(exc).__name__
 
 
 def _sanitize_log_fields(fields: Mapping[str, Any]) -> dict[str, Any]:
-    """递归清理日志字段，避免密钥、认证头或大段文本进入日志。"""
-    sanitized: dict[str, Any] = {}
-    for key, value in fields.items():
-        key_text = str(key)
-        if _is_sensitive_key(key_text):
-            sanitized[key_text] = "<redacted>"
-        elif key_text in _LONG_DIAGNOSTIC_TEXT_KEYS and isinstance(value, str):
-            sanitized[key_text] = _redact_sensitive_text(
-                value,
-                collapse_whitespace=False,
-            )
-        else:
-            sanitized[key_text] = _sanitize_log_value(value)
-    return sanitized
+    return {
+        str(key): _sanitize_log_value(value)
+        for key, value in fields.items()
+        if value is not None
+    }
 
 
 def _sanitize_log_value(value: Any) -> Any:
-    """清理日志值，仅保留短文本和结构化元数据。"""
     if isinstance(value, Mapping):
         return _sanitize_log_fields(value)
     if isinstance(value, list | tuple):
-        return [_sanitize_log_value(item) for item in value[:20]]
+        return [_sanitize_log_value(item) for item in value]
     if isinstance(value, str):
-        return _redact_sensitive_text(value)[:240]
+        return _redact_sensitive_text(value)
     return value
 
 
-def _is_sensitive_key(key: str) -> bool:
-    """识别不允许进入日志的字段名。"""
-    normalized = key.lower().replace("-", "_")
-    return (
-        normalized in {
-            "authorization",
-            "api_key",
-            "apikey",
-            "token",
-            "secret",
-            "password",
-            "client_secret",
-        }
-        or normalized.endswith("_token")
-        or normalized.endswith("_secret")
-    )
-
-
-_LONG_DIAGNOSTIC_TEXT_KEYS = {
-    "contentPreview",
-    "contentRaw",
-    "systemPromptPreview",
-    "systemPromptRaw",
-    "userContentPreview",
-    "userContentRaw",
-}
-
-
 def _redact_sensitive_text(
-    value: str,
-    extra_secrets: tuple[str, ...] = (),
-    collapse_whitespace: bool = True,
+    text: str,
+    extra_secrets: Sequence[str] = (),
 ) -> str:
-    """对潜在敏感片段做最小脱敏，并压缩空白。"""
-    text = re.sub(r"Bearer\s+[A-Za-z0-9._\-]+", "Bearer <redacted>", value)
-    text = re.sub(r"sk-[A-Za-z0-9_\-]+", "sk-<redacted>", text)
+    redacted = text
     for secret in extra_secrets:
         if secret:
-            text = text.replace(secret, "<redacted>")
-    if collapse_whitespace:
-        return " ".join(text.split())
-    return text
+            redacted = redacted.replace(secret, "<redacted>")
+    redacted = re.sub(
+        r"(?i)(api[_-]?key|authorization|bearer)\s*[:= ]\s*['\"]?[^'\"\s,}]+",
+        r"\1=<redacted>",
+        redacted,
+    )
+    return redacted
