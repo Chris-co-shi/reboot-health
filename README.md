@@ -18,29 +18,53 @@
 
 ## Current Status
 
-当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。本阶段已经把产品运行入口切到真实 OpenAI-compatible Provider，并保留 `INITIAL_PLANNING` 作为临时兼容业务入口。
+当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，`INITIAL_PLANNING` 兼容层已完成去污染和真实 LLM 验收。
 
-尚未完成：
+当前阶段：
 
-- 完整 Tool Call Loop。
+```text
+Phase 1 / 1.1 / 1.2 / 1.3：DONE
+Phase 2A 通用只读 Tool Call Agent Loop：READY
+```
+
+Phase 2A 的已确认实施规范：
+
+[`docs/implementation/phase-2a-read-only-tool-call-loop.md`](docs/implementation/phase-2a-read-only-tool-call-loop.md)
+
+尚未实现：
+
+- 通用 Tool Call Loop。
+- 只读健康上下文工具。
 - FastAPI 产品 API。
 - 数据库、Memory、完整 Safety Guard、Confirmation Pause/Resume。
-- Java/Flutter 到新 Python Runtime 的端到端迁移。
+- Plan 发布与 legacy 业务语义迁移。
 
-仓库中仍保留历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 代码；Java/Python HTTP 链路当前不可用，不属于本阶段修复范围。`deploy/docker-compose.yml` 仍是旧启动链路，不能代表当前 Python 产品入口。
+仓库中仍保留历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 代码；这些目录属于 legacy。Java/Python HTTP 链路和旧 Compose 启动链路当前不可用，不代表当前产品入口。
 
-## Runtime Shape
+## Current Runtime Shape
 
 ```text
 用户输入
 → Runtime 构建必要上下文
 → OpenAI-compatible ModelProvider.complete_turn(...)
-→ Assistant content 或 tool_calls
-→ 兼容层解析旧 INITIAL_PLANNING JSON
-→ 没有 Tool Call 时返回 AgentRunResult
+→ Assistant content
+→ INITIAL_PLANNING 兼容解析
+→ AgentRunResult
 ```
 
-当前 `INITIAL_PLANNING` 兼容层不执行 Tool Call；如果模型返回 Tool Call，会明确失败。
+Phase 2A 完成后的目标链路：
+
+```text
+用户输入
+→ 通用 AgentLoop
+→ Assistant content 或原生 Tool Call
+→ 只读 ToolExecutor
+→ role=tool Result
+→ 下一次 Model Turn
+→ 最终自然语言回答
+```
+
+当前兼容层收到 Tool Call 时仍会明确失败；不要将目标链路描述成已经实现。
 
 ## Python Quick Start
 
@@ -50,14 +74,14 @@ python3 -m compileall agent tests
 python3 -m unittest discover -s tests
 ```
 
-真实 Provider 需要配置：
+真实 Provider 配置：
 
 ```bash
 cd health_agent
 cp .env.example .env
 ```
 
-然后编辑 `health_agent/.env`：
+编辑 `health_agent/.env`：
 
 ```dotenv
 LLM_BASE_URL=https://api.example.com/v1
@@ -66,14 +90,7 @@ LLM_MODEL=your-model-name
 LLM_TIMEOUT_SECONDS=60
 ```
 
-也可以使用 shell 环境变量；shell 中的值优先于 `.env`：
-
-```bash
-export LLM_BASE_URL="https://api.example.com/v1"
-export LLM_API_KEY="replace-with-your-api-key"
-export LLM_MODEL="your-model-name"
-export LLM_TIMEOUT_SECONDS="60"
-```
+也可以使用 shell 环境变量；shell 中的值优先于 `.env`。
 
 本地入口：
 
@@ -89,16 +106,21 @@ python3 scripts/agent_console.py --user-text "想从低强度恢复训练"
 
 | 文档 | 内容 |
 |---|---|
-| [`health_agent/README.md`](health_agent/README.md) | 当前 Python Runtime 入口、状态和验证 |
+| [`docs/architecture.md`](docs/architecture.md) | 当前 Python 模块化单体与 Agent Runtime 架构 |
+| [`docs/mvp-exec-plan.md`](docs/mvp-exec-plan.md) | 当前阶段、状态、范围和验收 |
+| [`docs/implementation/phase-2a-read-only-tool-call-loop.md`](docs/implementation/phase-2a-read-only-tool-call-loop.md) | Phase 2A 的 IDE/人工开发交接规范 |
+| [`docs/decisions/0010-python-modular-monolith-and-agent-loop.md`](docs/decisions/0010-python-modular-monolith-and-agent-loop.md) | 当前长期架构决策 |
+| [`health_agent/README.md`](health_agent/README.md) | Python Runtime 入口和验证 |
 | [`AGENTS.md`](AGENTS.md) | 仓库级协作与边界规则 |
-| [`docs/`](docs/README.md) | 历史产品、架构和阶段文档，部分内容待按 Python 模块化单体方向更新 |
+| [`docs/`](docs/README.md) | 文档索引与阅读路径 |
 
 ## Agent Instructions
 
 | 范围 | 规则 |
 |---|---|
 | 全仓 | [`AGENTS.md`](AGENTS.md) |
-| Python Harness | [`health_agent/AGENTS.md`](health_agent/AGENTS.md) |
+| Python Runtime | [`health_agent/AGENTS.md`](health_agent/AGENTS.md) |
+| 文档 | [`docs/AGENTS.md`](docs/AGENTS.md) |
 | Java legacy | [`backend/AGENTS.md`](backend/AGENTS.md) |
 | Flutter legacy | [`clients/flutter/AGENTS.md`](clients/flutter/AGENTS.md) |
 | Vue legacy | [`frontend/AGENTS.md`](frontend/AGENTS.md) |
