@@ -15,8 +15,7 @@ from agent.memory.manager import MemoryCandidateBuilder
 from agent.models import ModelProvider, ProviderResponseError
 from agent.runtime.context import ContextBuilder
 from agent.runtime.result import AgentRunError, AgentRunResult
-from agent.runtime.session import AgentSession, InMemorySessionStore
-from agent.runtime.state import RunStatus
+from agent.runtime.session import AgentSession, AgentSessionStatus, InMemorySessionStore
 from agent.runtime.trace import RunTrace, TraceRecorder
 from agent.safety.planning_quality import PlanningQualityGate
 from agent.schemas.agent import (
@@ -126,7 +125,7 @@ class AgentLoop:
         )
 
         if self.limits.max_steps <= 0:
-            session.status = RunStatus.FAILED
+            session.status = AgentSessionStatus.FAILED
             trace.warnings.append("max_steps_exceeded")
             self.trace_recorder.finish(trace, FINAL_OUTCOME_MAX_STEPS_EXCEEDED)
             self.trace_recorder.record_step(
@@ -149,7 +148,7 @@ class AgentLoop:
 
         skill = self.skill_registry.get(trigger)
         if skill is None:
-            session.status = RunStatus.FAILED
+            session.status = AgentSessionStatus.FAILED
             self.trace_recorder.finish(trace, FINAL_OUTCOME_UNSUPPORTED)
             self.trace_recorder.record_step(
                 trace,
@@ -170,7 +169,7 @@ class AgentLoop:
             )
 
         trace.selected_skill = trigger
-        session.status = RunStatus.RUNNING
+        session.status = AgentSessionStatus.ACTIVE
         session.current_skill = trigger
 
         context = self.context_builder.build(trigger, skill_payload, session)
@@ -246,10 +245,10 @@ class AgentLoop:
             )
             final_outcome = self._final_outcome_for(output)
             if final_outcome == "waiting_confirmation":
-                session.status = RunStatus.WAITING_CONFIRMATION
+                session.status = AgentSessionStatus.WAITING_CONFIRMATION
                 session.pending_confirmations.append(trigger)
             else:
-                session.status = RunStatus.COMPLETED
+                session.status = AgentSessionStatus.COMPLETED
             self.trace_recorder.finish(trace, final_outcome)
             self.trace_recorder.record_step(
                 trace,
@@ -270,7 +269,7 @@ class AgentLoop:
                 quality_findings=quality_findings,
             )
         except ProviderResponseError as exc:
-            session.status = RunStatus.FAILED
+            session.status = AgentSessionStatus.FAILED
             trace.warnings.append(exc.safe_summary)
             self.trace_recorder.finish(trace, FINAL_OUTCOME_FAILED)
             self.trace_recorder.record_step(
@@ -291,7 +290,7 @@ class AgentLoop:
                 ),
             )
         except (SchemaValidationError, ValueError) as exc:
-            session.status = RunStatus.FAILED
+            session.status = AgentSessionStatus.FAILED
             self.trace_recorder.finish(trace, FINAL_OUTCOME_ERROR)
             self.trace_recorder.record_step(
                 trace,
