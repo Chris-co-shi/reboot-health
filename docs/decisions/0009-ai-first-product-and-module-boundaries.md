@@ -2,7 +2,11 @@
 
 ## 状态
 
-已确认。
+已替代。
+
+由 [`0010 Python 模块化单体与通用 Agent Loop`](0010-python-modular-monolith-and-agent-loop.md) 替代。
+
+本文保留为历史决策，描述 Java、Python、Flutter 多运行时阶段的职责划分；不得再作为当前实现依据。
 
 ## 背景
 
