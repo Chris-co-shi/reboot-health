@@ -10,7 +10,6 @@ from agent.tools.contract import (
     ToolArgumentError,
     ToolDefinition,
     ToolPermission,
-    ToolSideEffect,
 )
 
 CONVERT_WEIGHT_UNIT_TOOL_NAME = "convert_weight_unit"
@@ -73,7 +72,6 @@ def create_convert_weight_unit_tool() -> ToolDefinition:
         input_schema=CONVERT_WEIGHT_UNIT_INPUT_SCHEMA,
         output_schema=CONVERT_WEIGHT_UNIT_OUTPUT_SCHEMA,
         permission=ToolPermission.READ_ONLY,
-        side_effect=ToolSideEffect.NONE,
         timeout_seconds=1.0,
         handler=convert_weight_unit,
         argument_validator=validate_convert_weight_arguments,

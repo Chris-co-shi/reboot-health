@@ -1,4 +1,4 @@
-"""只读 Tool Executor。"""
+"""Tool Executor 强制执行边界。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from agent.tools.contract import (
     ToolArgumentError,
     ToolExecutionResult,
     ToolPermission,
-    ToolSideEffect,
     error_content,
     success_content,
 )
@@ -18,12 +17,18 @@ from agent.tools.registry import ToolRegistry
 UNKNOWN_TOOL = "unknown_tool"
 INVALID_ARGUMENTS = "invalid_arguments"
 FORBIDDEN_TOOL = "forbidden_tool"
+TOOL_CONFIRMATION_REQUIRED = "tool_confirmation_required"
 TOOL_EXECUTION_FAILED = "tool_execution_failed"
 INVALID_TOOL_RESULT = "invalid_tool_result"
 
 
 class ToolExecutor:
-    """执行已注册的只读无副作用 Tool。"""
+    """执行已注册 Tool 的普通入口。
+
+    本入口没有“已确认后执行”能力，也没有 bypass 参数。即使调用方绕过
+    ApprovalPolicy 直接调用 Executor，`CONFIRMATION_REQUIRED` Tool 也只能得到
+    结构化确认错误，handler 绝不会被调用。
+    """
 
     def __init__(self, registry: ToolRegistry) -> None:
         self.registry = registry
@@ -38,16 +43,6 @@ class ToolExecutor:
                 message=f"Unknown tool: {tool_call.name}",
             )
 
-        if (
-            definition.permission != ToolPermission.READ_ONLY
-            or definition.side_effect != ToolSideEffect.NONE
-        ):
-            return self._error(
-                tool_call=tool_call,
-                code=FORBIDDEN_TOOL,
-                message="Tool is not allowed in the read-only runtime",
-            )
-
         try:
             arguments = definition.validate_arguments(tool_call.arguments)
         except (ToolArgumentError, TypeError, ValueError) as exc:
@@ -55,6 +50,22 @@ class ToolExecutor:
                 tool_call=tool_call,
                 code=INVALID_ARGUMENTS,
                 message=_safe_argument_error_message(exc),
+            )
+
+        # 未来 GenericAgentLoop 接入顺序应保持：
+        # registry lookup -> argument validation -> ApprovalPolicy -> execute/pause。
+        # Executor 仍重复检查 permission，作为调用方绕过 Policy 时的第二道边界。
+        if definition.permission == ToolPermission.CONFIRMATION_REQUIRED:
+            return self._error(
+                tool_call=tool_call,
+                code=TOOL_CONFIRMATION_REQUIRED,
+                message="Tool requires user confirmation before execution",
+            )
+        if definition.permission != ToolPermission.READ_ONLY:
+            return self._error(
+                tool_call=tool_call,
+                code=FORBIDDEN_TOOL,
+                message="Tool permission is not supported by this executor",
             )
 
         try:

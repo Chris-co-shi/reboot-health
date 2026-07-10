@@ -1,4 +1,4 @@
-"""只读 Tool Runtime 合同。
+"""Tool Runtime 合同。
 
 本模块是产品 Tool 的唯一合同定义。模型只能看到 name、description 和
 input_schema；handler、校验器和内部实现细节只供确定性 Tool Runtime 使用。
@@ -16,22 +16,14 @@ from agent.models.base import freeze_mapping, mutable_mapping
 
 
 class ToolPermission(StrEnum):
-    """Phase 2A Tool 权限。"""
+    """Runtime 对 Tool 执行策略的唯一权威声明。
+
+    `READ_ONLY` 可以由通用 ToolExecutor 自动执行；`CONFIRMATION_REQUIRED`
+    只允许进入后续确认流程。本枚举不表达业务风险分级，也不表达发布阶段。
+    """
 
     READ_ONLY = "read_only"
-    READ = "read_only"
-    WRITE = "write"
-    LOW_RISK_WRITE = "low_risk_write"
     CONFIRMATION_REQUIRED = "confirmation_required"
-    FORBIDDEN = "forbidden"
-
-
-class ToolSideEffect(StrEnum):
-    """Phase 2A Tool 副作用等级。"""
-
-    NONE = "none"
-    WRITE = "write"
-    EXTERNAL_IO = "external_io"
 
 
 class ToolArgumentError(ValueError):
@@ -44,13 +36,17 @@ ToolArgumentValidator = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 @dataclass(frozen=True)
 class ToolDefinition:
-    """受控 Tool 的产品合同。"""
+    """受控 Tool 的产品合同。
+
+    权限、handler 和 validator 都是 Runtime 内部元数据，不会进入模型可见
+    Tool Schema。`argument_validator` 必须保持确定性和无副作用，因为后续确认
+    流程会先校验参数，再冻结被确认的参数快照。
+    """
 
     name: str
     description: str
     input_schema: Mapping[str, Any] = field(default_factory=dict)
     permission: ToolPermission = ToolPermission.READ_ONLY
-    side_effect: ToolSideEffect = ToolSideEffect.NONE
     timeout_seconds: float = 10.0
     handler: ToolHandler | None = None
     output_schema: Mapping[str, Any] = field(default_factory=dict)
@@ -75,17 +71,8 @@ class ToolDefinition:
             raise ValueError("Tool output_schema must be a mapping")
         object.__setattr__(self, "output_schema", freeze_mapping(self.output_schema))
 
-        try:
-            permission = ToolPermission(self.permission)
-        except ValueError as exc:
-            raise ValueError(f"Unsupported tool permission: {self.permission!r}") from exc
-        object.__setattr__(self, "permission", permission)
-
-        try:
-            side_effect = ToolSideEffect(self.side_effect)
-        except ValueError as exc:
-            raise ValueError(f"Unsupported tool side_effect: {self.side_effect!r}") from exc
-        object.__setattr__(self, "side_effect", side_effect)
+        if not isinstance(self.permission, ToolPermission):
+            raise ValueError("Tool permission must be a ToolPermission")
 
         try:
             timeout_seconds = float(self.timeout_seconds)
@@ -101,7 +88,10 @@ class ToolDefinition:
             raise ValueError("Tool argument_validator must be callable")
 
     def validate_arguments(self, arguments: Mapping[str, Any]) -> Mapping[str, Any]:
-        """执行工具专属参数校验并返回不可变参数 Mapping。"""
+        """执行工具专属参数校验并返回不可变参数 Mapping。
+
+        这里不判断用户确认状态；参数合法性与执行许可是两个独立边界。
+        """
         if self.argument_validator is None:
             return freeze_mapping(arguments)
         validated = self.argument_validator(arguments)

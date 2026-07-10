@@ -14,7 +14,7 @@ from agent.tools.builtin.convert_weight import (
     create_convert_weight_unit_tool,
     validate_convert_weight_arguments,
 )
-from agent.tools.contract import ToolArgumentError, ToolDefinition, ToolPermission, ToolSideEffect
+from agent.tools.contract import ToolArgumentError, ToolDefinition, ToolPermission
 from agent.tools.executor import ToolExecutor
 from agent.tools.registry import ToolRegistry
 
@@ -25,7 +25,6 @@ class ConvertWeightUnitDefinitionTest(unittest.TestCase):
 
         self.assertEqual(definition.name, CONVERT_WEIGHT_UNIT_TOOL_NAME)
         self.assertEqual(definition.permission, ToolPermission.READ_ONLY)
-        self.assertEqual(definition.side_effect, ToolSideEffect.NONE)
         self.assertGreater(definition.timeout_seconds, 0)
         self.assertTrue(callable(definition.handler))
         self.assertTrue(callable(definition.argument_validator))
@@ -63,7 +62,6 @@ class ConvertWeightUnitDefinitionTest(unittest.TestCase):
         self.assertFalse(hasattr(model_definition, "handler"))
         self.assertFalse(hasattr(model_definition, "argument_validator"))
         self.assertFalse(hasattr(model_definition, "permission"))
-        self.assertFalse(hasattr(model_definition, "side_effect"))
 
 
 class ConvertWeightUnitConversionTest(unittest.TestCase):
@@ -235,7 +233,6 @@ class ConvertWeightUnitExecutorIntegrationTest(unittest.TestCase):
             input_schema=base_definition.input_schema,
             output_schema=base_definition.output_schema,
             permission=base_definition.permission,
-            side_effect=base_definition.side_effect,
             timeout_seconds=base_definition.timeout_seconds,
             handler=handler,
             argument_validator=base_definition.argument_validator,

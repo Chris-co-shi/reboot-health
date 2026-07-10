@@ -10,7 +10,6 @@ from agent.tools.contract import (
     ToolDefinition,
     ToolExecutionResult,
     ToolPermission,
-    ToolSideEffect,
 )
 
 __all__ = [
@@ -18,5 +17,4 @@ __all__ = [
     "ToolDefinition",
     "ToolExecutionResult",
     "ToolPermission",
-    "ToolSideEffect",
 ]

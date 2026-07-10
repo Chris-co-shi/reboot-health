@@ -11,7 +11,7 @@ from agent.runtime.core import AgentCore
 from agent.runtime.generic_loop import GenericAgentLoop
 from agent.runtime.loop import AgentLoop, LoopLimits
 from agent.tools.builtin.convert_weight import CONVERT_WEIGHT_UNIT_TOOL_NAME
-from agent.tools.contract import ToolPermission, ToolSideEffect
+from agent.tools.contract import ToolPermission
 
 from tests.support.scripted_model_provider import ScriptedModelProvider
 
@@ -50,7 +50,6 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
         definitions = loop.tool_registry.list()
         self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
         self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
-        self.assertEqual(definitions[0].side_effect, ToolSideEffect.NONE)
         fake_client.chat.completions.create.assert_not_called()
 
     def test_generic_bootstrap_returns_independent_runtime_instances(self) -> None:

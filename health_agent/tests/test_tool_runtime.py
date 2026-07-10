@@ -8,21 +8,31 @@ from agent.tools.contract import (
     ToolDefinition,
     ToolExecutionResult,
     ToolPermission,
-    ToolSideEffect,
 )
-from agent.tools.executor import ToolExecutor
+from agent.tools.executor import TOOL_CONFIRMATION_REQUIRED, ToolExecutor
 from agent.tools.registry import ToolRegistry
 
 
 class ToolContractTest(unittest.TestCase):
-    def test_valid_read_only_none_tool_definition(self) -> None:
+    def test_permission_values_are_stable(self) -> None:
+        self.assertEqual(ToolPermission.READ_ONLY.value, "read_only")
+        self.assertEqual(ToolPermission.CONFIRMATION_REQUIRED.value, "confirmation_required")
+        self.assertEqual(
+            {permission.value for permission in ToolPermission},
+            {"read_only", "confirmation_required"},
+        )
+
+    def test_valid_read_only_tool_definition(self) -> None:
         definition = _tool_definition()
 
         self.assertEqual(definition.name, "sample_tool")
         self.assertEqual(definition.description, "Sample read-only tool")
         self.assertEqual(definition.permission, ToolPermission.READ_ONLY)
-        self.assertEqual(definition.side_effect, ToolSideEffect.NONE)
         self.assertEqual(definition.timeout_seconds, 10.0)
+
+    def test_permission_must_be_tool_permission(self) -> None:
+        with self.assertRaises(ValueError):
+            _tool_definition(permission="read_only")  # type: ignore[arg-type]
 
     def test_empty_name_fails(self) -> None:
         with self.assertRaises(ValueError):
@@ -98,22 +108,24 @@ class ToolRegistryTest(unittest.TestCase):
         for item in model_definitions:
             self.assertFalse(hasattr(item, "handler"))
             self.assertFalse(hasattr(item, "permission"))
-            self.assertFalse(hasattr(item, "side_effect"))
             self.assertNotIn("handler", repr(item))
 
-    def test_non_read_only_tool_registration_fails(self) -> None:
-        definition = _tool_definition(permission=ToolPermission.WRITE)
-        registry = ToolRegistry()
+    def test_confirmation_required_tool_can_be_registered_without_execution(self) -> None:
+        called = {"count": 0}
 
-        with self.assertRaises(ValueError):
-            registry.register(definition)
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
 
-    def test_side_effect_tool_registration_fails(self) -> None:
-        definition = _tool_definition(side_effect=ToolSideEffect.WRITE)
-        registry = ToolRegistry()
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            handler=handler,
+        )
+        registry = ToolRegistry([definition])
 
-        with self.assertRaises(ValueError):
-            registry.register(definition)
+        self.assertIs(registry.get("confirmation_tool"), definition)
+        self.assertEqual(called["count"], 0)
 
 
 class ToolExecutorTest(unittest.TestCase):
@@ -169,22 +181,108 @@ class ToolExecutorTest(unittest.TestCase):
         self.assertEqual(content["error"]["message"], "value must be a number")
         self.assertEqual(called["count"], 0)
 
-    def test_forbidden_tool_returns_error_and_does_not_call_handler(self) -> None:
+    def test_confirmation_required_tool_returns_error_and_does_not_call_handler(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
+
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            handler=handler,
+        )
+        registry = ToolRegistry([definition])
+
+        result = ToolExecutor(registry).execute(
+            _tool_call(name="confirmation_tool", arguments={"value": 95})
+        )
+
+        content = json.loads(result.content)
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, TOOL_CONFIRMATION_REQUIRED)
+        self.assertEqual(content["error"]["code"], TOOL_CONFIRMATION_REQUIRED)
+        self.assertEqual(content["error"]["message"], "Tool requires user confirmation before execution")
+        self.assertEqual(called["count"], 0)
+
+    def test_confirmation_required_tool_does_not_leak_arguments(self) -> None:
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            argument_validator=lambda arguments: {"value": arguments["value"]},
+        )
+
+        result = ToolExecutor(ToolRegistry([definition])).execute(
+            _tool_call(
+                name="confirmation_tool",
+                arguments={"value": "sensitive-health-note"},
+            )
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, TOOL_CONFIRMATION_REQUIRED)
+        self.assertNotIn("sensitive-health-note", result.content)
+
+    def test_invalid_confirmation_required_arguments_return_invalid_arguments(self) -> None:
         called = {"count": 0}
 
         def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
             called["count"] += 1
             return {"value": 1}
 
-        registry = ToolRegistry()
+        def validator(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            raise ToolArgumentError("value must be safe")
+
         definition = _tool_definition(
-            name="unsafe_tool",
-            permission=ToolPermission.WRITE,
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            handler=handler,
+            argument_validator=validator,
+        )
+
+        result = ToolExecutor(ToolRegistry([definition])).execute(
+            _tool_call(name="confirmation_tool", arguments={"value": "bad"})
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, "invalid_arguments")
+        self.assertEqual(called["count"], 0)
+
+    def test_consecutive_confirmation_required_calls_never_execute_handler(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
+
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
             handler=handler,
         )
+        executor = ToolExecutor(ToolRegistry([definition]))
+
+        first = executor.execute(_tool_call(name="confirmation_tool", arguments={"value": 1}))
+        second = executor.execute(_tool_call(name="confirmation_tool", arguments={"value": 2}))
+
+        self.assertEqual(first.error_code, TOOL_CONFIRMATION_REQUIRED)
+        self.assertEqual(second.error_code, TOOL_CONFIRMATION_REQUIRED)
+        self.assertEqual(called["count"], 0)
+
+    def test_unsupported_permission_returns_forbidden_without_handler(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": 1}
+
+        definition = _tool_definition(name="mutated_tool", handler=handler)
+        object.__setattr__(definition, "permission", "unsupported")
+        registry = ToolRegistry()
         registry._definitions[definition.name] = definition
 
-        result = ToolExecutor(registry).execute(_tool_call(name="unsafe_tool"))
+        result = ToolExecutor(registry).execute(_tool_call(name="mutated_tool"))
 
         self.assertFalse(result.success)
         self.assertEqual(result.error_code, "forbidden_tool")
@@ -273,7 +371,6 @@ def _tool_definition(
     input_schema: Mapping[str, Any] | None = None,
     output_schema: Mapping[str, Any] | None = None,
     permission: ToolPermission = ToolPermission.READ_ONLY,
-    side_effect: ToolSideEffect = ToolSideEffect.NONE,
     timeout_seconds: float = 10.0,
     handler=None,
     argument_validator=None,
@@ -285,7 +382,6 @@ def _tool_definition(
         or {"type": "object", "properties": {"value": {"type": "number"}}},
         output_schema=output_schema or {"type": "object"},
         permission=permission,
-        side_effect=side_effect,
         timeout_seconds=timeout_seconds,
         handler=handler or (lambda arguments: {"value": 95}),
         argument_validator=argument_validator,

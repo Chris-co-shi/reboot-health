@@ -258,7 +258,6 @@ class GenericAgentLoopToolCallTest(unittest.TestCase):
             self.assertFalse(hasattr(tools[0], "handler"))
             self.assertFalse(hasattr(tools[0], "argument_validator"))
             self.assertFalse(hasattr(tools[0], "permission"))
-            self.assertFalse(hasattr(tools[0], "side_effect"))
 
     def test_tool_executor_registry_mismatch_is_rejected(self) -> None:
         registry = _convert_registry()
