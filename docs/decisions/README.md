@@ -13,23 +13,26 @@
 
 ## Decision index
 
-| ID | Decision | Summary |
-|---|---|---|
-| [0001](0001-personal-single-user-scope.md) | 单人个人使用范围 | 私有单用户优先，但保留明确数据归属边界 |
-| [0002](0002-modular-monolith.md) | 模块化单体架构 | Java Health Domain Kernel 使用模块化单体 |
-| [0003](0003-ai-proposal-only.md) | AI 候选与确认边界 | AI 生成候选；重要变化需确认；低风险调整可受控执行 |
-| [0004](0004-windows-docker-postgresql.md) | Docker 与 PostgreSQL 17 | 明确本地部署与数据库运行方式 |
-| [0005](0005-frontend-pnpm.md) | 前端使用 pnpm | Vue 内部调试工具统一包管理方式 |
-| [0006](0006-redis-not-in-mvp.md) | Redis 暂不进入 MVP | 当前阶段避免引入非必要基础设施 |
-| [0007](0007-plan-version-idempotency.md) | 计划版本和 POST 幂等 | 固化计划版本、revision 与幂等规则 |
-| [0008](0008-m25a-flutter-agent-device-bootstrap.md) | Flutter、Runtime 与设备初始化 | 确认客户端、AgentRun 和设备认证技术骨架 |
-| [0009](0009-ai-first-product-and-module-boundaries.md) | Health Agent Harness 与领域内核 | Python 是智能核心，Java 是事实与安全权威 |
+| ID | Decision | Status | Summary |
+|---|---|---|---|
+| [0001](0001-personal-single-user-scope.md) | 单人个人使用范围 | 已确认 | 私有单用户优先，但保留明确数据归属边界 |
+| [0002](0002-modular-monolith.md) | 模块化单体架构 | 已扩展 | 保持单体部署和模块边界；当前 Python 实现方向见 0010 |
+| [0003](0003-ai-proposal-only.md) | AI 候选与确认边界 | 已确认 | AI 生成候选；重要变化需确认；低风险调整可受控执行 |
+| [0004](0004-windows-docker-postgresql.md) | Docker 与 PostgreSQL 17 | 历史待迁移 | 描述旧部署与数据库运行方式，不代表当前 Python Runtime 已接入 |
+| [0005](0005-frontend-pnpm.md) | 前端使用 pnpm | 历史 | Vue 内部调试工具的包管理方式 |
+| [0006](0006-redis-not-in-mvp.md) | Redis 暂不进入 MVP | 已确认 | 当前阶段避免引入非必要基础设施 |
+| [0007](0007-plan-version-idempotency.md) | 计划版本和 POST 幂等 | 语义保留待迁移 | 后续 Python 实现仍需保留版本、revision 与幂等语义 |
+| [0008](0008-m25a-flutter-agent-device-bootstrap.md) | Flutter、Runtime 与设备初始化 | 历史 | 旧多运行时技术骨架，不作为当前实施入口 |
+| [0009](0009-ai-first-product-and-module-boundaries.md) | Health Agent Harness 与 Java 领域内核 | 已替代 | 旧 Python/Java/Flutter 职责划分，由 0010 替代 |
+| [0010](0010-python-modular-monolith-and-agent-loop.md) | Python 模块化单体与通用 Agent Loop | 已确认 | Python 是当前与目标 Runtime；按有限轮次 Tool Call Loop 和纵向切片演进 |
 
 ## Status rules
 
 - `已确认`：当前有效决策。
 - `已扩展`：仍有效，但由后续 ADR 补充。
 - `已替代`：保留历史，正文必须链接替代它的 ADR。
+- `历史`：只描述旧阶段事实，不作为当前实施依据。
+- `语义保留待迁移`：旧实现不再扩展，但关键业务语义必须在后续 Python 迁移中保留。
 
 不要删除历史 ADR，也不要把路线设想、实现笔记或临时 TODO 写成架构决策。
 
