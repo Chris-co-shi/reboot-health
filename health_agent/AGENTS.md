@@ -1,78 +1,285 @@
-# Python Health Agent Backend 规则
+# Python Health Agent Runtime 规则
 
 ## 定位
 
-`health_agent/` 是 reboot-health 当前真实 Python Health Agent Runtime，负责模型回合、运行边界、Skill 兼容层、Tool 合同骨架和运行轨迹。它不是通用开发 Agent，也不是简单模型代理。
+`health_agent/` 是 reboot-health 当前与目标 Python 模块化单体 Runtime。
 
-仓库中仍保留历史 Java/Flutter/部署代码，但当前重构方向是 Python 模块化单体；未经用户明确要求，不在本目录任务中修复旧 Java/Python HTTP 链路。
+当前重构方向由以下文档共同约束：
 
-## Intent Layer
+```text
+../docs/architecture.md
+../docs/mvp-exec-plan.md
+../docs/decisions/0010-python-modular-monolith-and-agent-loop.md
+```
 
-- Core 是 narrow waist：只做请求归一化、Skill 分发、错误收敛和运行边界。
-- Capability lives at the edges：能力应放在 Skills、Tools、Memory、Models、Domain、Persistence、Storage 或 Plugins。
-- 新增健康能力优先新增或扩展 Skill，不要膨胀 `agent/runtime/core.py`。
-- 产品 Provider 必须通过 `agent/bootstrap.py` 注入，不得在 Core、Loop 或 Skill 内自行创建。
-- 新增 Tool 必须通过 ToolRegistry 注册，声明权限、影响等级、输入输出 Schema、确认策略、幂等策略、超时和审计策略。
-- 当前 ToolExecutor 仍只是 skeleton，不得宣称已经具备真实业务工具调用能力。
-- Agent 不得直接访问 DB、Redis、文件系统或 shell。
-- Agent Loop、LLM、Prompt 不得直接访问 PostgreSQL、Redis、文件系统或任意外部资源。
-- Tool 内部可以调用 Domain Service；Domain Service 可以调用 Repository；Repository 才负责数据库访问。
-- MemoryCandidate 不等于 confirmed memory，不得宣称已经沉淀为长期记忆、已确认事实或用户档案。
-- 健康安全规则优先于模型输出。
-- 重要健康事实、健康约束、目标、计划发布和训练负荷增加必须等待用户确认。
-- 产品 LLM 配置使用 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_TIMEOUT_SECONDS`。
-- `.env` 的规范路径是 `health_agent/.env`，只允许 Bootstrap 或 Bootstrap 直接调用的配置加载函数读取；shell 环境变量优先于 `.env`。
-- 普通 unittest 不允许调用真实模型、网络、数据库或外部服务；测试替身只能放在 `tests/`。
+Phase 2A 的唯一工程交接规范：
 
-## Harness 长期规则
+```text
+../docs/implementation/phase-2a-read-only-tool-call-loop.md
+```
 
-- 运行结果必须能被结构化审计：`AgentRunResult` 是外部合同，`RunTrace` 是运行摘要。
-- QualityGate 发现项必须保留结构化形式；`warnings` 只作为兼容摘要。
-- Trace 和日志不得记录完整健康原文、完整 prompt、raw model response、API key 或认证信息。
-- 当前不是 ReAct，不是 Autonomous Agent；未实现 structured multi-step loop 前不得使用相关完成口径。
-- 候选、草案、解释都不是业务事实；确认、发布、保存和审计仍属于后续权威边界。
+未经用户明确要求，不在本目录任务中修复旧 Java/Python HTTP 链路，也不修改 Flutter、Vue 或 Compose。
 
 ## 当前阶段
 
-- `INITIAL_PLANNING` 仍是临时兼容业务入口。
-- 产品运行 Provider 是 OpenAI-compatible `ModelProvider.complete_turn(...)`。
-- AgentLoop、AgentRunResult、RunTrace、PlanningQualityGate 已接入兼容路径。
-- 真实 LLM 集成测试必须显式配置环境变量；缺少配置时 skip。
-- ToolExecutor 仍是 skeleton；没有 shell/file/sql tool。
-- Memory 当前只有 MemoryCandidate，不持久化、不自动确认。
-- PostgreSQL、Redis、FastAPI、Java Runtime API、正式 Persistence、多 Agent、MCP、消息队列和向量数据库暂未接入。
+- Phase 1、1.1、1.2、1.3 已完成。
+- 产品运行 Provider 是真实 OpenAI-compatible `ModelProvider.complete_turn(...)`。
+- `INITIAL_PLANNING` 是已验证但仍待隔离的 legacy compatibility adapter。
+- Phase 2A 状态为 `READY`，目标是通用只读 Tool Call Agent Loop。
+- 当前 ToolExecutor 仍是 skeleton；在 Phase 2A 完成并真实验收前不得宣称具备产品工具调用能力。
+- PostgreSQL、Redis、FastAPI、正式 Persistence、Memory、Safety Guard、Confirmation、Plan Publish、多 Agent、MCP、消息队列和向量数据库尚未接入。
 
-## 目录规则
+## Phase 2A 任务合同
 
-- `agent/runtime/`：Core、Loop、Session、Context、Trace、State。
-- `agent/models/`：通用 ModelProvider 合同和 OpenAI-compatible Provider。
-- `agent/tools/`：Tool Contract、Registry、Executor 和内置 Tool 预留。
-- `agent/skills/`：Python Skill 实现、Skill 协议和 Skill Registry；当前 `INITIAL_PLANNING` 是兼容层。
-- `agent/memory/`：MemoryCandidate、Manager、Summary 和 Provider 预留。
-- `agent/domain/`：健康领域服务预留边界。
-- `agent/persistence/`：DB/Repository 预留边界。
-- `agent/api/`：API 层预留边界，当前不接 Web 框架。
-- `agent/storage/`：受控文件存储边界。
-- `agent/schemas/`：跨层传输 Schema。
-- `skills/`：外置 Skill 资产，如 Prompt、示例和评测。
-- `prompts/`：公共系统边界、安全规则和输出合同。
-- `plugins/`：后续插件机制预留。
-- `tests/support/`：测试专用 Provider 和测试辅助实现，产品代码不得引用。
+开始修改前必须声明：
+
+```text
+Primary Module:
+  health_agent 通用 Agent Runtime 与只读 Tool Call Loop
+
+Allowed Paths:
+  agent/runtime/
+  agent/models/
+  agent/tools/
+  agent/bootstrap.py
+  agent/main.py
+  scripts/agent_console.py
+  prompts/
+  tests/
+  README.md
+  AGENTS.md
+
+Conditional Compatibility Path:
+  agent/skills/initial_planning.py
+  只允许为隔离兼容入口做最小修改。
+
+Forbidden Paths:
+  ../backend/
+  ../clients/flutter/
+  ../frontend/
+  ../deploy/docker-compose.yml
+
+Out of Scope:
+  FastAPI、数据库、Memory、Safety Guard、Confirmation、Plan Publish、
+  DailyRecord、写操作 Tool、多 Agent、Subagent、DAG、工作流引擎、消息队列。
+```
+
+## Runtime 边界
+
+Agent Runtime 只负责：
+
+- 通用请求归一化。
+- Runtime Environment。
+- Message History。
+- Model Turn。
+- Tool Call Loop。
+- 最大模型回合和最大 Tool Call 数。
+- 整体超时。
+- 错误收敛。
+- RunTrace。
+- 后续阶段的 Session/Confirmation 协议边界，但本阶段不实现。
+
+Runtime 不得包含：
+
+- 训练规则。
+- 血压、疼痛、饮食或医学判断。
+- Program、Phase、WeeklyPlan、TodayAction。
+- 数据库访问。
+- 用户健康事实硬编码。
+- 写操作、确认或发布策略。
+
+## ModelProvider 边界
+
+Provider 只负责：
+
+- 调用 OpenAI-compatible Chat Completions。
+- 转换 system/user/assistant/tool 消息。
+- 转换模型可见 Tool Schema。
+- 解析 assistant content、Tool Call、usage 和 finish reason。
+- 归一化配置、网络、鉴权、限流、超时和协议错误。
+
+Provider 不得：
+
+- 读取 `.env` 或 `os.environ`。
+- 执行 Tool。
+- 解析 PlanningOutput。
+- 选择 Skill。
+- 自动重试或回退测试替身。
+- 知道 Program、Phase、WeeklyPlan、TodayAction、PlanVersion 或 HealthConstraint。
+
+产品 Provider 必须通过 `agent/bootstrap.py` 显式注入。
+
+## Message Contract
+
+Phase 2A 必须支持：
+
+```text
+system
+user
+assistant
+tool
+```
+
+不变量：
+
+- assistant 可携带一个或多个 `tool_calls`。
+- tool 消息必须关联对应 `tool_call_id`。
+- Tool Result 不得伪装成 user 消息。
+- 同一 assistant 回合的所有 Tool Result 追加后，才能进入下一次 Model Turn。
+
+## Tool Runtime 边界
+
+### ToolRegistry
+
+只负责：
+
+- 白名单注册。
+- 工具名称非空和唯一性校验。
+- 按名称查找。
+- 输出模型可见 name、description 和 input schema。
+
+不得执行 Tool，不得暴露 handler、Python 路径或内部类名。
+
+### ToolExecutor
+
+只负责：
+
+- 查找注册工具。
+- 校验 READ_ONLY 权限和无副作用边界。
+- 校验 arguments。
+- 调用 handler。
+- 输出合法 JSON Tool Result。
+- 将 unknown_tool、invalid_arguments、tool_execution_failed、invalid_tool_result 返回模型。
+
+不得：
+
+- 执行未注册工具。
+- 使用 shell、任意文件系统或任意 SQL。
+- 输出 Python traceback 给模型。
+- 自动重试失败 Tool。
+- 把失败结果伪装成成功。
+
+### Phase 2A 工具权限
+
+只允许：
+
+```text
+READ_ONLY
+```
+
+如果现有枚举名为 `READ`，只能表达无持久化副作用的查询或纯计算。
+
+不得注册：
+
+```text
+WRITE
+LOW_RISK_WRITE
+CONFIRMATION_REQUIRED
+PROPOSAL
+PUBLISH
+FORBIDDEN
+```
+
+首个正式产品 Tool 是 `convert_weight_unit`，只支持 kg、lb、jin 的确定性换算，不做 BMI、医学或训练判断。
+
+## Runtime Environment
+
+通用 Context 只保留：
+
+```text
+runtimeEnvironment.currentDate
+runtimeEnvironment.currentDateTime
+runtimeEnvironment.timezone
+runtimeEnvironment.locale
+```
+
+不再向通用 Runtime 暴露独立 `today`。`INITIAL_PLANNING` 如需要，只能在兼容适配器内部派生。
+
+时间必须可注入，以便测试不依赖机器当前时间。
+
+## INITIAL_PLANNING 兼容层
+
+- 只能作为显式 legacy 入口保留。
+- 普通用户请求不得默认通过 trigger 进入该 Skill。
+- 通用 AgentLoop 不得导入 PlanningOutput、Program、Phase 或 WeeklyPlan。
+- 兼容层不得反向要求通用 Runtime 使用固定 Planning 工作流。
+- 本阶段不删除 Planning 业务结构，也不借机重写计划逻辑。
+
+## Bootstrap
+
+唯一产品组装顺序：
+
+```text
+LLMSettings
+→ OpenAICompatibleProvider
+→ ToolRegistry
+→ 注册内置只读工具
+→ ToolExecutor
+→ AgentLoop
+→ AgentCore / 产品入口
+```
+
+Bootstrap 不得导入 `tests/`、ScriptedModelProvider、MockProvider、Fake Tool 或 Smoke Tool。
+
+## 测试规则
+
+- 普通 unittest 不允许调用真实模型、网络、数据库或外部服务。
+- ScriptedModelProvider 只能位于 `tests/support/`。
+- 测试替身不得包含健康计划业务逻辑。
+- Phase 2A 必须覆盖直接回答、单 Tool Call、多 Tool Call、未知工具、参数非法、Tool 异常、非法 Tool 结果、空响应、最大模型回合、最大工具次数和消息顺序。
+- 真实 LLM 验收必须确认原生 Tool Call、role=tool Result、至少两次模型回合和不经过 `INITIAL_PLANNING`。
+
+## 日志与 Trace
+
+RunTrace 可以记录：
+
+- provider。
+- 模型回合数。
+- Tool Call 数。
+- 工具名称。
+- finish reason。
+- 限制或错误分类。
+- latency 和 usage 摘要。
+
+禁止记录：
+
+- 完整健康原文。
+- 完整 prompt。
+- raw model response。
+- API key、Authorization header 或令牌。
+- 对用户或模型暴露的 Python traceback。
 
 ## 禁止
 
-- 不开放 shell tool、任意文件系统 tool 或任意 SQL tool。
-- 不连接 PostgreSQL 或 Redis，除非任务明确进入对应纵向切片。
-- 不新增其他模型供应商框架；当前只支持 OpenAI-compatible Chat Completions。
-- 不直接发布 PlanVersion 或修改已确认事实。
-- 不把 AI 输出写成已保存、已确认、已发布或已生效。
-- 不为了测试通过而删除测试、放宽断言、绕过校验或降低业务规则。
-- 不记录完整健康原文、密钥、令牌或认证信息。
+- 不开放 shell Tool、任意文件系统 Tool 或任意 SQL Tool。
+- 不连接 PostgreSQL、SQLite 或 Redis。
+- 不新增其他模型供应商框架。
+- 不实现写操作、Safety Guard、Confirmation、Plan Publish 或 Memory 半成品。
+- 不通过普通文本解析伪 Tool Call。
+- 不新增多 Agent、Subagent、DAG 或工作流引擎。
+- 不为了测试通过而删除测试、放宽断言、绕过校验或降低规则。
+- 不记录真实健康资料、密钥、令牌或认证信息。
 
 ## 验证命令
 
 ```bash
 cd health_agent
 python3 -m compileall agent tests
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests -v
+
+git diff --check
 ```
+
+产品路径替身检查：
+
+```bash
+rg "MockProvider|ScriptedModelProvider" agent scripts
+```
+
+任意执行能力检查：
+
+```bash
+rg "eval\\(|exec\\(|subprocess|os\\.system" agent/tools agent/runtime
+```
+
+真实验收输入与完整 Definition of Done 见 Phase 2A 实施规范。
