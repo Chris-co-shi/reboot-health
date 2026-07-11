@@ -29,14 +29,16 @@
 - Phase 1 / 1.1 / 1.2 / 1.3
 - Phase 2A 通用只读 Tool Call Agent Loop
 - Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础（DONE_EXPLICIT）
+- Phase 2C Interactive Session & Conversation Context
 
 当前默认产品体验：
-- 一次命令只接收一次用户输入
+- one-shot 命令一次只接收一次用户输入
 - 单次 Agent Run 内支持模型与工具多回合
 - agent.main 与 agent_console.py 默认使用内存 Store
-- 不同进程之间没有对话连续性
+- scripts/agent_chat.py 支持同一进程连续对话
+- scripts/agent_chat.py 支持显式 JSON Store 跨进程恢复指定 Session
 
-NEXT：Phase 2C Interactive Session & Conversation Context
+当前后续：Phase 3A 仍为 TODO，进入前需要单独确认健康领域 Read Model、Repository Port 与只读工具范围
 ```
 
 当前默认产品链路：
@@ -54,7 +56,7 @@ NEXT：Phase 2C Interactive Session & Conversation Context
 → 进程结束
 ```
 
-Phase 2C 完成后的目标体验：
+Phase 2C 已完成的目标体验：
 
 ```text
 启动交互式 CLI
@@ -163,8 +165,7 @@ Phase 2C 完成后的目标体验：
 当前限制：
 
 - 默认 `agent.main` 和 `agent_console.py` 仍使用内存 Store。
-- 没有交互式聊天 CLI。
-- 没有 Session 列表、恢复、删除等用户命令。
+- 没有 Session 列表或删除等用户命令。
 - 没有 Console/API 的批准、拒绝和恢复入口。
 - 没有正式写操作 Tool。
 - JSON 文件为本地明文，不声明医疗数据合规能力。
@@ -173,7 +174,7 @@ Phase 2C 完成后的目标体验：
 
 ### Phase 2C：Interactive Session & Conversation Context
 
-状态：`READY`
+状态：`DONE`
 
 实施规范：
 
@@ -185,14 +186,18 @@ Phase 2C 完成后的目标体验：
 
 #### 范围
 
+已完成：
+
 - 新增交互式 `scripts/agent_chat.py`。
 - 单进程复用同一组 Runtime Components。
 - 使用同一个 `session_id` 连续追加用户消息。
 - 支持内存与显式 JSON Store。
 - 支持退出后恢复指定 Session。
-- 最小命令：`/help`、`/new`、`/status`、`/resume`、`/exit`。
+- 最小命令：`/help`、`/new`、`/status`、`/resume <session-id>`、`/exit`。
 - 对用户明确区分 one-shot CLI 与 interactive CLI。
 - 为后续上下文预算和对话摘要保留稳定边界。
+- JSON 模式启动时提示本地明文风险。
+- `/resume` 不存在 Session 时不调用模型。
 
 #### 不包含
 
@@ -223,6 +228,27 @@ Agent：恢复此前对话消息
 - 不把普通澄清问题建模为 PendingAction。
 - 默认 one-shot 入口行为不被破坏。
 - 不把 Conversation Summary 写成已确认健康事实。
+
+真实验收摘要：
+
+```text
+同进程连续对话：
+- Session ID：phase2c-real-continuity
+- Agent Run：2 次，均 completed
+- 模型回合数：1 + 1
+- Tool Call 数：0 + 0
+- 第二轮保留“增肌计划”目标，未重新询问用户想做什么
+- 未声称读取用户档案或历史训练记录
+
+JSON 跨进程恢复：
+- Session ID：phase2c-real-acceptance
+- Agent Run：2 次，均 completed
+- 模型回合数：1 + 1
+- Tool Call 数：0 + 0
+- 第二个进程使用相同 JSON Store 目录和 Session ID 恢复上下文
+
+INITIAL_PLANNING：未经过
+```
 
 ## 5. 后续阶段
 
@@ -369,7 +395,6 @@ Flutter → Java AgentRun → Python Runtime
 
 ## 8. 当前未决事项
 
-- Phase 2C Session 列表和删除能力是否进入首个 Slice。
 - 对话上下文预算与摘要触发阈值。
 - Phase 3A 本地持久化最终采用 SQLite、PostgreSQL 或其它方案。
 - 正式客户端采用 Flutter、Web 或其它形态。

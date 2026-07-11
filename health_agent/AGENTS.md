@@ -34,13 +34,14 @@
 - `INITIAL_PLANNING` 是已验证且隔离的显式 legacy compatibility adapter。
 - Phase 2A 通用只读 Tool Call Agent Loop 已完成并经过真实 LLM Tool Call 验收。
 - Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础已完成显式能力。
-- 默认 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot、内存 Store 入口。
-- 当前下一阶段是 Phase 2C Interactive Session & Conversation Context。
+- Phase 2C Interactive Session & Conversation Context 已完成并经过真实 LLM 连续对话与 JSON 恢复验收。
+- 默认 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot、内存 Store 入口；`scripts/agent_chat.py` 是显式交互式 Session CLI。
+- 当前后续阶段是 Phase 3A 健康领域 Read Model、Repository Port 与只读工具，但仍为 TODO，进入前需要独立任务确认。
 - PostgreSQL、SQLite、Redis、FastAPI、健康领域 Repository、长期 Memory、产品级 Safety Guard、正式写操作和 Plan Publish 尚未接入。
 
 ## Phase 2C 任务合同
 
-开始修改前必须声明：
+维护 Phase 2C 交互式 Session CLI 或相关 Runtime Store 组装前必须声明：
 
 ```text
 Primary Module:

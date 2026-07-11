@@ -45,13 +45,18 @@ DONE_EXPLICIT：
 - stale recovery
 - orphan PendingAction maintenance
 
-NEXT：
+DONE：
 - Interactive Session CLI
-- 产品入口显式接入 JSON Store
-- 连续对话与跨进程 Session 恢复
+- 产品入口显式接入 memory/json Store
+- 连续对话与显式 JSON 跨进程 Session 恢复
+
+TODO：
+- 健康领域 Read Model 与只读工具
+- 健康领域 Repository 与正式持久化
+- 产品级 Safety Guard 与正式写操作
 ```
 
-当前默认 `agent.main` 和 `scripts/agent_console.py` 是 one-shot 入口：每次进程只接受一次用户输入，进程之间不共享消息历史。
+当前 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot 入口：每次进程只接受一次用户输入，进程之间不共享消息历史。`scripts/agent_chat.py` 是 Phase 2C 交互式入口：单进程复用同一组 Runtime Components，并可在显式 JSON 模式下恢复指定 Session。
 
 ## 3. 总体结构
 
@@ -238,7 +243,7 @@ stale recovery 采用保守策略：
 - 普通澄清问题不创建 PendingAction。
 - 模型不得把单次推断自动变成长期 Memory。
 
-## 8. Phase 2C 目标架构
+## 8. Phase 2C 交互式 Session 入口
 
 ```text
 scripts/agent_chat.py
@@ -250,9 +255,9 @@ scripts/agent_chat.py
 → /new /resume /status /exit
 ```
 
-内存模式用于单次进程体验；JSON 模式用于退出后恢复。
+内存模式用于单次进程体验；JSON 模式用于退出后恢复。JSON Store 必须显式提供目录，且文件为本地明文，只适合受控本地环境。
 
-Phase 2C 只解决 Conversation Continuity，不引入健康领域数据、数据库、Safety Guard 或写操作 Tool。
+Phase 2C 只解决 Conversation Continuity，不引入健康领域数据、数据库、长期 Memory、Safety Guard 或写操作 Tool。普通 Clarification 通过下一轮 user message 继续，不创建 PendingAction，也不把自然语言当作确认批准。
 
 ## 9. Model Provider
 

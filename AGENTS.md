@@ -30,9 +30,9 @@ docs/decisions/0011-session-context-memory-boundaries.md
 - Phase 1、1.1、1.2、1.3 已完成。
 - Phase 2A 通用只读 Tool Call Agent Loop 已完成并经过真实 LLM Tool Call 验收。
 - Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础已完成显式能力。
-- 默认 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot、内存 Store 入口。
-- 当前下一阶段是 Phase 2C Interactive Session & Conversation Context。
-- Phase 2C 只建设连续对话 CLI、显式 JSON Session 恢复和必要的产品入口组装。
+- Phase 2C Interactive Session & Conversation Context 已完成并经过真实 LLM 连续对话与 JSON 恢复验收。
+- 默认 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot、内存 Store 入口；`scripts/agent_chat.py` 是显式交互式 Session CLI。
+- 当前后续阶段是 Phase 3A 健康领域 Read Model、Repository Port 与只读工具，但仍为 TODO，进入前需要独立任务确认。
 - 健康领域 Repository、健康只读工具、数据库、长期 Memory、完整 Safety、正式写操作和 FastAPI 尚未实现。
 - `INITIAL_PLANNING` 是显式 legacy compatibility 入口，不代表最终 Agent 架构。
 - 历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 默认视为 legacy；未经用户明确要求不得扩展。
@@ -41,7 +41,7 @@ docs/decisions/0011-session-context-memory-boundaries.md
 
 ## 开发前阅读顺序
 
-实施当前 Phase 2C 前必须按顺序读取：
+实施 Phase 2C 维护或后续 Session CLI 变更前必须按顺序读取：
 
 ```text
 AGENTS.md
@@ -122,9 +122,9 @@ Tool Runtime 负责：
 
 ## Phase 2C 边界
 
-Phase 2C 允许：
+Phase 2C 已实现：
 
-- 新增 `scripts/agent_chat.py`。
+- `scripts/agent_chat.py`。
 - 单进程复用同一 Runtime Components。
 - 使用固定 `session_id` 连续调用 `GenericAgentLoop.run(...)`。
 - 显式选择 memory/json Store。

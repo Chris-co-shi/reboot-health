@@ -8,7 +8,7 @@
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
 Phase 2A 通用只读 Tool Call Agent Loop：DONE
 Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础：DONE_EXPLICIT
-Phase 2C Interactive Session & Conversation Context：READY / NEXT
+Phase 2C Interactive Session & Conversation Context：DONE
 ```
 
 当前 Phase 2C 工程交接规范：
@@ -21,7 +21,9 @@ Phase 2C Interactive Session & Conversation Context：READY / NEXT
 
 ## 当前用户体验
 
-当前入口是 one-shot CLI：
+当前保留 one-shot CLI，并新增 interactive Session CLI。
+
+one-shot CLI：
 
 ```text
 一次用户输入
@@ -36,15 +38,23 @@ Phase 2C Interactive Session & Conversation Context：READY / NEXT
 → 进程退出
 ```
 
+interactive CLI：
+
+```text
+启动 scripts/agent_chat.py
+→ 单进程复用同一组 Runtime Components
+→ 同一个 session_id 连续追加 user/assistant/tool 消息
+→ 显式 JSON 模式可在进程退出后恢复同一 Session
+```
+
 这意味着：
 
 - 单次 Run 内支持模型与工具多回合。
 - 每个 `agent_console.py --user-text` 命令默认是新的进程和新的内存 Store。
-- Agent 可以在答案中提出问题，但当前 console 不会停下来继续读取下一轮用户输入。
-- 不同命令之间默认没有消息历史。
-- JSON Store 已实现，但默认入口没有启用。
-
-Phase 2C 将新增交互式 `scripts/agent_chat.py`，复用同一 Runtime Components 和 `session_id`，并支持显式 JSON Session 恢复。
+- Agent 可以在 one-shot 答案中提出问题，但 one-shot console 不会继续读取下一轮用户输入。
+- `agent_chat.py` 可以连续读取用户输入，普通澄清问题通过下一轮 user message 继续。
+- `agent_chat.py` 默认使用 memory Store；JSON Store 必须显式传入目录。
+- JSON Store 为本地明文，可能包含用户消息、assistant 消息和 Tool Result。
 
 ## 目录结构
 
@@ -60,7 +70,7 @@ health_agent/
     memory/          # MemoryCandidate 骨架，不持久化
     api/             # API 层预留，当前不接 Web 框架
   prompts/           # 通用 Agent system prompt
-  scripts/           # one-shot console；Phase 2C 将新增 interactive chat
+  scripts/           # one-shot console 与 interactive chat
   tests/             # unittest 和测试专用 scripted provider
 ```
 
@@ -82,7 +92,7 @@ health_agent/
 | Lease / Fencing | `DONE_EXPLICIT` | RUNNING owner、heartbeat、lease 与 fence generation |
 | Checkpoint / Recovery | `DONE_EXPLICIT` | 仅 DRIVE_READY 自动恢复，其余 in-flight 状态 fail-closed |
 | Orphan Maintenance | `DONE_EXPLICIT` | 显式扫描、过期和清理 orphan PendingAction |
-| Interactive Session CLI | `READY` | 当前下一阶段 |
+| Interactive Session CLI | `DONE` | `scripts/agent_chat.py` 支持连续对话、/new、/status、/resume 和显式 JSON 恢复 |
 | 健康领域 Repository / Read Tools | `TODO` | 尚不能读取真实档案、计划或训练记录 |
 | 完整 Safety / 写操作 / API | `TODO` | 后续独立阶段 |
 
@@ -126,6 +136,45 @@ status / modelTurns / toolCalls / finishReason / answer
 - Agent 提问后等待用户下一轮回答。
 - 默认跨进程恢复。
 - Session 列表、切换或删除。
+
+## 交互式 Session CLI
+
+默认 memory 模式：
+
+```bash
+cd health_agent
+python3 scripts/agent_chat.py
+```
+
+显式 JSON 模式：
+
+```bash
+python3 scripts/agent_chat.py \
+  --storage json \
+  --storage-directory runtime-state \
+  --session-id chris-main
+```
+
+参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--storage memory\|json` | 默认 `memory`；`json` 必须显式提供目录 |
+| `--storage-directory <path>` | JSON Store 目录；不会通过环境变量隐式启用 |
+| `--session-id <id>` | 指定已有或新 Session；未提供时生成不透明随机 ID |
+
+命令：
+
+| 命令 | 行为 |
+|---|---|
+| `/help` | 显示命令、当前 storage 和 JSON 明文提醒 |
+| `/new` | 生成并切换到新的 Session，不覆盖旧 Session |
+| `/status` | 显示 Session ID、状态、消息数量、storage 和是否已持久化 |
+| `/resume <session-id>` | 只切换到已存在 Session；不存在时不调用模型 |
+| `/exit` | 正常退出 |
+
+空输入不会调用模型；未知 `/command` 只显示帮助，不发送给模型。Phase 2C
+不实现 `/delete` 或 Session 列表。
 
 ## 本地 JSON Runtime Store
 
@@ -194,7 +243,7 @@ PendingAction orphan 维护必须显式调用；默认 dry-run 不返回 argumen
 
 ```bash
 cd health_agent
-python3 -m compileall agent tests
+python3 -m compileall agent tests scripts
 python3 -m unittest discover -s tests -v
 python3 -m unittest tests.test_json_store_multiprocess -v
 python3 -m unittest tests.test_run_lease_multiprocess -v
@@ -213,6 +262,17 @@ Phase 2A 验收摘要：
 真实工具调用次数：1
 真实工具名称：convert_weight_unit
 真实转换结果：190 jin → 95 kg
+```
+
+Phase 2C 验收摘要：
+
+```text
+确定性测试：375 个通过，默认跳过 2 个显式真实集成测试
+真实同进程连续对话：2 次 Agent Run，Session ID 一致
+真实 JSON 跨进程恢复：2 次 Agent Run，Session ID 一致
+真实模型回合数：同进程 1 + 1，JSON 恢复 1 + 1
+真实工具调用次数：0
+未经过 INITIAL_PLANNING
 ```
 
 ## 开发阅读顺序

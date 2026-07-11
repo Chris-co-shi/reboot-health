@@ -2,7 +2,7 @@
 
 ## 1. 状态
 
-`READY`
+阶段状态以 [`../mvp-exec-plan.md`](../mvp-exec-plan.md) 为准。
 
 本规范定义当前下一阶段的唯一工程交接目标：在不引入健康领域数据、数据库、Safety Guard 或正式写操作的前提下，将现有 GenericAgentLoop 和 JSON Runtime Store 组装成可连续对话、可显式恢复的本地交互式 CLI。
 
@@ -36,7 +36,7 @@ Agent 提问
 → Agent 基于上轮内容继续
 ```
 
-Phase 2C 只补齐产品会话入口和上下文连续性，不扩展健康业务能力。
+Phase 2C 已补齐产品会话入口和上下文连续性，不扩展健康业务能力。
 
 ## 3. 用户目标体验
 
@@ -208,6 +208,14 @@ json
 
 普通用户输入不得与命令解析混淆。未知 `/command` 应提示帮助，不发送给模型。
 
+当前实现：
+
+- 空输入不会调用模型。
+- EOF、Ctrl-D 和 Ctrl-C 按正常退出处理。
+- `/resume <session-id>` 只切换已存在 Session；不存在时不调用模型。
+- `/status` 只显示 Session ID、状态、消息数量、storage 和是否已持久化。
+- JSON 模式启动和 `/help`、`/status` 都提示本地明文风险。
+
 ## 7. Session 状态处理
 
 ### ACTIVE / COMPLETED
@@ -336,3 +344,27 @@ Phase 2C 标记为 `DONE` 前必须满足：
 - 普通 Clarification 未被建模成 Confirmation。
 - 未引入健康领域事实、数据库或长期 Memory 半成品。
 - 文档和真实运行体验一致。
+
+## 13. 验收记录
+
+真实 LLM 验收未提交完整对话日志，只记录安全摘要：
+
+```text
+同进程连续对话：
+- Session ID：phase2c-real-continuity
+- Agent Run：2 次 completed
+- 模型回合数：1 + 1
+- Tool Call 数：0 + 0
+- 第二轮保留前一轮“增肌计划”目标
+- 未重新询问用户想做什么
+- 未声称读取用户档案或历史训练记录
+
+JSON 跨进程恢复：
+- Session ID：phase2c-real-acceptance
+- Agent Run：2 次 completed
+- 模型回合数：1 + 1
+- Tool Call 数：0 + 0
+- 第二个进程使用相同 JSON Store 目录和 Session ID 恢复上下文
+
+INITIAL_PLANNING：未经过
+```
