@@ -12,6 +12,8 @@ from agent.config import load_llm_settings_from_env
 from agent.models import ModelProvider, OpenAICompatibleProvider
 from agent.runtime.core import AgentCore
 from agent.runtime.generic_loop import GenericAgentLoop
+from agent.runtime.pending_action_store import InMemoryPendingActionStore
+from agent.runtime.session import InMemorySessionStore
 from agent.skills.initial_planning import InitialPlanningSkill
 from agent.skills.registry import SkillRegistry
 from agent.tools.builtin.convert_weight import create_convert_weight_unit_tool
@@ -30,10 +32,16 @@ def create_generic_agent_loop_from_env(dotenv_path: Path | None = None) -> Gener
     provider = create_model_provider_from_env(dotenv_path=dotenv_path)
     registry = ToolRegistry([create_convert_weight_unit_tool()])
     executor = ToolExecutor(registry)
+    # 产品 Composition Root 显式注入 runtime store，避免 GenericAgentLoop 内部偷偷
+    # 创建第二套状态依赖；当前仍是内存实现，后续持久化替换时只需改这里。
+    session_store = InMemorySessionStore()
+    pending_action_store = InMemoryPendingActionStore()
     return GenericAgentLoop(
         provider=provider,
+        session_store=session_store,
         tool_registry=registry,
         tool_executor=executor,
+        pending_action_store=pending_action_store,
     )
 
 

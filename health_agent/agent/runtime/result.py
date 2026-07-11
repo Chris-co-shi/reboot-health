@@ -7,6 +7,7 @@ AgentRunResult 是后续 FastAPI、真实模型和 Flutter 接入前的稳定运
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Mapping
 
 from agent.memory.candidate import MemoryCandidate
@@ -31,6 +32,30 @@ class AgentRunError:
 
 
 @dataclass(frozen=True)
+class PendingActionSummary:
+    """等待确认动作的外部安全摘要。
+
+    该结构面向 CLI/API 层展示，不携带完整 arguments、arguments_hash、Store version
+    或 Provider 原始响应。真正的可执行快照只保存在 PendingActionStore 中。
+    """
+
+    action_id: str
+    tool_name: str
+    summary: str
+    expires_at: datetime
+
+    def to_dict(self) -> dict[str, str]:
+        """返回可序列化的等待确认摘要。"""
+
+        return {
+            "actionId": self.action_id,
+            "toolName": self.tool_name,
+            "summary": self.summary,
+            "expiresAt": self.expires_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True)
 class AgentRunResult:
     """一次 AgentLoop 运行的稳定结果合同。"""
 
@@ -51,6 +76,7 @@ class AgentRunResult:
     model_turns: int = 0
     tool_calls: int = 0
     finish_reason: str | None = None
+    pending_action: PendingActionSummary | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """返回 API 友好的 camelCase 结构。"""
@@ -76,6 +102,11 @@ class AgentRunResult:
             "modelTurns": self.model_turns,
             "toolCalls": self.tool_calls,
             "finishReason": self.finish_reason,
+            "pendingAction": (
+                self.pending_action.to_dict()
+                if self.pending_action is not None
+                else None
+            ),
         }
 
 

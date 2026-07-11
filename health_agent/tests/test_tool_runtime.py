@@ -129,6 +129,109 @@ class ToolRegistryTest(unittest.TestCase):
 
 
 class ToolExecutorTest(unittest.TestCase):
+    def test_read_only_preflight_succeeds_without_handler_call(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
+
+        executor = ToolExecutor(ToolRegistry([_tool_definition(handler=handler)]))
+
+        preflight = executor.preflight(_tool_call(arguments={"value": 95}))
+
+        self.assertTrue(preflight.is_valid)
+        self.assertIsNone(preflight.error_result)
+        self.assertEqual(preflight.prepared_call.tool_name, "sample_tool")
+        self.assertEqual(preflight.prepared_call.arguments["value"], 95)
+        self.assertEqual(called["count"], 0)
+
+    def test_confirmation_required_preflight_succeeds_without_handler_call(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
+
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            handler=handler,
+        )
+        executor = ToolExecutor(ToolRegistry([definition]))
+
+        preflight = executor.preflight(_tool_call(name="confirmation_tool"))
+
+        self.assertTrue(preflight.is_valid)
+        self.assertEqual(preflight.prepared_call.definition.permission, ToolPermission.CONFIRMATION_REQUIRED)
+        self.assertEqual(called["count"], 0)
+
+    def test_unknown_tool_preflight_returns_structured_error(self) -> None:
+        preflight = ToolExecutor(ToolRegistry()).preflight(_tool_call(name="missing"))
+
+        self.assertFalse(preflight.is_valid)
+        self.assertEqual(preflight.error_result.error_code, "unknown_tool")
+
+    def test_invalid_raw_json_preflight_returns_invalid_arguments(self) -> None:
+        preflight = ToolExecutor(ToolRegistry([_tool_definition()])).preflight(
+            ModelToolCall(
+                id="call-bad-json",
+                name="sample_tool",
+                raw_arguments="{",
+                arguments={"value": 95},
+            )
+        )
+
+        self.assertFalse(preflight.is_valid)
+        self.assertEqual(preflight.error_result.error_code, "invalid_arguments")
+
+    def test_validator_failure_preflight_returns_invalid_arguments(self) -> None:
+        definition = _tool_definition(
+            argument_validator=lambda arguments: (_ for _ in ()).throw(
+                ToolArgumentError("value must be a number")
+            )
+        )
+
+        preflight = ToolExecutor(ToolRegistry([definition])).preflight(_tool_call())
+
+        self.assertFalse(preflight.is_valid)
+        self.assertEqual(preflight.error_result.error_code, "invalid_arguments")
+
+    def test_preflight_arguments_are_defensive_snapshot(self) -> None:
+        source_arguments = {"nested": {"items": [1]}}
+        definition = _tool_definition(
+            argument_validator=lambda arguments: {"nested": arguments["nested"]}
+        )
+        executor = ToolExecutor(ToolRegistry([definition]))
+
+        preflight = executor.preflight(_tool_call(arguments=source_arguments))
+        source_arguments["nested"]["items"].append(2)
+
+        self.assertEqual(preflight.prepared_call.arguments["nested"]["items"], (1,))
+        with self.assertRaises(TypeError):
+            preflight.prepared_call.arguments["nested"] = {}
+
+    def test_execute_prepared_still_rejects_confirmation_required_tool(self) -> None:
+        called = {"count": 0}
+
+        def handler(arguments: Mapping[str, Any]) -> Mapping[str, Any]:
+            called["count"] += 1
+            return {"value": arguments["value"]}
+
+        definition = _tool_definition(
+            name="confirmation_tool",
+            permission=ToolPermission.CONFIRMATION_REQUIRED,
+            handler=handler,
+        )
+        executor = ToolExecutor(ToolRegistry([definition]))
+        prepared = executor.preflight(_tool_call(name="confirmation_tool")).prepared_call
+
+        result = executor.execute_prepared(prepared)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_code, TOOL_CONFIRMATION_REQUIRED)
+        self.assertEqual(called["count"], 0)
+
     def test_valid_arguments_call_handler(self) -> None:
         calls: list[Mapping[str, Any]] = []
 

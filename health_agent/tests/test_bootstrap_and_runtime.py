@@ -10,6 +10,8 @@ from agent.models import ModelResponse, OpenAICompatibleProvider, ProviderConfig
 from agent.runtime.core import AgentCore
 from agent.runtime.generic_loop import GenericAgentLoop
 from agent.runtime.loop import AgentLoop, LoopLimits
+from agent.runtime.pending_action_store import InMemoryPendingActionStore
+from agent.runtime.session import InMemorySessionStore
 from agent.tools.builtin.convert_weight import CONVERT_WEIGHT_UNIT_TOOL_NAME
 from agent.tools.contract import ToolPermission
 
@@ -45,6 +47,8 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
 
         self.assertIsInstance(loop, GenericAgentLoop)
         self.assertIsInstance(loop.provider, OpenAICompatibleProvider)
+        self.assertIsInstance(loop.session_store, InMemorySessionStore)
+        self.assertIsInstance(loop.pending_action_store, InMemoryPendingActionStore)
         self.assertIs(loop.tool_executor.registry, loop.tool_registry)
 
         definitions = loop.tool_registry.list()
@@ -63,6 +67,8 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
         self.assertIsNot(first, second)
         self.assertIsNot(first.tool_registry, second.tool_registry)
         self.assertIsNot(first.tool_executor, second.tool_executor)
+        self.assertIsNot(first.session_store, second.session_store)
+        self.assertIsNot(first.pending_action_store, second.pending_action_store)
 
     def test_agent_core_and_loop_require_injected_provider(self) -> None:
         provider = ScriptedModelProvider([ModelResponse(content=_planning_json())])
