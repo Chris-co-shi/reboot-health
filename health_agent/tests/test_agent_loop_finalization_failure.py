@@ -69,7 +69,7 @@ class GenericAgentLoopFinalizationFailureTest(unittest.TestCase):
         stored = store.get("session-1")
         self.assertEqual(stored.status, AgentSessionStatus.RUNNING)
         self.assertEqual(stored.active_run_id, result.run_id)
-        self.assertEqual(stored.version, 6)
+        self.assertEqual(stored.version, 9)
         self.assertNotIn("private-store-path", json.dumps(result.to_dict(), ensure_ascii=False))
 
     def test_final_answer_commit_then_raise_returns_original_completed_result(self) -> None:
@@ -93,7 +93,7 @@ class GenericAgentLoopFinalizationFailureTest(unittest.TestCase):
         stored = store.get("session-1")
         self.assertEqual(stored.status, AgentSessionStatus.COMPLETED)
         self.assertIsNone(stored.active_run_id)
-        self.assertEqual(stored.version, 7)
+        self.assertEqual(stored.version, 10)
 
     def test_save_and_read_failure_returns_state_unknown(self) -> None:
         """保存失败后连读取都失败时，Runtime 只能报告终态未知。"""
@@ -138,7 +138,7 @@ class GenericAgentLoopFinalizationFailureTest(unittest.TestCase):
         stored = store.raw_session("session-1")
         self.assertEqual(stored.status, AgentSessionStatus.RUNNING)
         self.assertEqual(stored.active_run_id, "run-other")
-        self.assertEqual(stored.version, 7)
+        self.assertEqual(stored.version, 10)
 
     def test_second_confirmation_pause_save_failure_returns_finalization_error(self) -> None:
         """Resume 遇到第二个确认工具时，WAITING_CONFIRMATION 保存失败不得伪装暂停。"""
@@ -357,6 +357,8 @@ class FinalizationFailureSessionStore(InMemorySessionStore):
             changed = copy_session(current)
             changed.status = AgentSessionStatus.RUNNING
             changed.active_run_id = self.owner_after_failure
+            changed.run_fence_generation = current.run_fence_generation + 1
+            changed.execution_checkpoint = None
             changed.updated_at = utc_now()
             self._sessions[session_id] = replace(
                 changed,

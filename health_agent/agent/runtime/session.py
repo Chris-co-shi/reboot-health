@@ -17,6 +17,7 @@ from uuid import uuid4
 from agent.models import ModelMessage, ModelToolCall
 from agent.models.base import mutable_mapping
 from agent.runtime.continuation import AgentContinuation
+from agent.runtime.execution_checkpoint import RunExecutionCheckpoint
 from agent.runtime.state import RunStatus
 
 
@@ -49,6 +50,7 @@ class AgentSession:
     run_fence_generation: int = 0
     active_run_last_heartbeat_at: datetime | None = None
     active_run_lease_expires_at: datetime | None = None
+    execution_checkpoint: RunExecutionCheckpoint | None = None
     version: int = 0
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -92,6 +94,11 @@ class AgentSession:
                 raise ValueError("RUNNING session must have active_run_lease_expires_at")
             if self.active_run_lease_expires_at <= self.active_run_last_heartbeat_at:
                 raise ValueError("RUNNING session lease must expire after heartbeat")
+            if self.execution_checkpoint is not None:
+                if self.execution_checkpoint.originating_run_id != self.active_run_id:
+                    raise ValueError("RUNNING checkpoint must match active_run_id")
+                if self.execution_checkpoint.run_fence_generation != self.run_fence_generation:
+                    raise ValueError("RUNNING checkpoint must match run_fence_generation")
         else:
             if self.active_run_id is not None:
                 raise ValueError("non-RUNNING session must not have active_run_id")
@@ -99,6 +106,8 @@ class AgentSession:
                 raise ValueError("non-RUNNING session must not have active_run_last_heartbeat_at")
             if self.active_run_lease_expires_at is not None:
                 raise ValueError("non-RUNNING session must not have active_run_lease_expires_at")
+            if self.execution_checkpoint is not None:
+                raise ValueError("non-RUNNING session must not have execution_checkpoint")
         if not isinstance(self.version, int) or self.version < 0:
             raise ValueError("version must be a non-negative integer")
         if not isinstance(self.turns, int) or self.turns < 0:
@@ -238,6 +247,7 @@ def copy_session(session: AgentSession) -> AgentSession:
         run_fence_generation=session.run_fence_generation,
         active_run_last_heartbeat_at=session.active_run_last_heartbeat_at,
         active_run_lease_expires_at=session.active_run_lease_expires_at,
+        execution_checkpoint=session.execution_checkpoint,
         version=session.version,
         created_at=session.created_at,
         updated_at=session.updated_at,

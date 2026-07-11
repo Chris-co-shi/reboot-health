@@ -15,6 +15,10 @@ from agent.models.base import freeze_mapping
 from agent.runtime.approval_policy import ApprovalPolicy, ToolDisposition
 from agent.runtime.continuation import AgentContinuation
 from agent.runtime.context import build_runtime_environment
+from agent.runtime.execution_checkpoint import (
+    RunExecutionCheckpoint,
+    RunExecutionCheckpointPhase,
+)
 from agent.runtime.pending_action import PendingAction, PendingActionStatus
 from agent.runtime.pending_action_store import (
     InMemoryPendingActionStore,
@@ -63,6 +67,10 @@ ERROR_SESSION_OWNERSHIP_LOST = "SESSION_OWNERSHIP_LOST"
 ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY = "SESSION_STALE_RUN_REQUIRES_RECOVERY"
 ERROR_SESSION_RUN_LEASE_EXPIRED = "SESSION_RUN_LEASE_EXPIRED"
 ERROR_SESSION_RUN_FENCE_LOST = "SESSION_RUN_FENCE_LOST"
+ERROR_SESSION_RECOVERY_NOT_ELIGIBLE = "SESSION_RECOVERY_NOT_ELIGIBLE"
+ERROR_SESSION_RECOVERY_MODEL_STATE_UNKNOWN = "SESSION_RECOVERY_MODEL_STATE_UNKNOWN"
+ERROR_SESSION_RECOVERY_TOOL_STATE_UNKNOWN = "SESSION_RECOVERY_TOOL_STATE_UNKNOWN"
+ERROR_SESSION_RECOVERY_CHECKPOINT_CORRUPTED = "SESSION_RECOVERY_CHECKPOINT_CORRUPTED"
 ERROR_PENDING_ACTION_CREATE_FAILED = "PENDING_ACTION_CREATE_FAILED"
 TOOL_POLICY_DENIED = "tool_policy_denied"
 DEFAULT_CONFIRMATION_TTL_SECONDS = 15 * 60
@@ -478,6 +486,14 @@ class GenericAgentLoop:
         )
         if heartbeat_error is not None:
             return heartbeat_error
+        checkpoint_error = self._checkpoint_state_or_result(
+            trace=trace,
+            state=state,
+            phase=RunExecutionCheckpointPhase.DRIVE_READY,
+            message="Session could not save drive-ready checkpoint",
+        )
+        if checkpoint_error is not None:
+            return checkpoint_error
 
         while True:
             if state.current_assistant_message_index is not None:
@@ -534,6 +550,14 @@ class GenericAgentLoop:
             )
             if heartbeat_error is not None:
                 return heartbeat_error
+            checkpoint_error = self._checkpoint_state_or_result(
+                trace=trace,
+                state=state,
+                phase=RunExecutionCheckpointPhase.MODEL_CALL_IN_FLIGHT,
+                message="Session could not save model in-flight checkpoint",
+            )
+            if checkpoint_error is not None:
+                return checkpoint_error
             try:
                 response = self.provider.complete_turn(
                     messages=tuple(state.session.messages),
@@ -653,6 +677,14 @@ class GenericAgentLoop:
                 state.current_assistant_message_index = assistant_message_index
                 state.next_tool_call_index = 0
                 state.current_originating_run_id = trace.run_id
+                checkpoint_error = self._checkpoint_state_or_result(
+                    trace=trace,
+                    state=state,
+                    phase=RunExecutionCheckpointPhase.DRIVE_READY,
+                    message="Session could not save post-model checkpoint",
+                )
+                if checkpoint_error is not None:
+                    return checkpoint_error
                 continue
 
             final_text = str(response.content or "").strip()
@@ -782,6 +814,140 @@ class GenericAgentLoop:
 
         session.messages.append(message)
         return self._save_owned_session(session, _require_ownership(ownership))
+
+    def _checkpoint_state_or_result(
+        self,
+        *,
+        trace,
+        state: _DriveState,
+        phase: RunExecutionCheckpointPhase,
+        message: str,
+        current_tool_call_id: str | None = None,
+        current_tool_name: str | None = None,
+    ) -> AgentRunResult | None:
+        """持久化当前执行 checkpoint；失败时 fail closed。"""
+
+        try:
+            state.session = self._save_execution_checkpoint(
+                state=state,
+                phase=phase,
+                current_tool_call_id=current_tool_call_id,
+                current_tool_name=current_tool_name,
+            )
+            return None
+        except SessionStoreError as exc:
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=state.finish_reason,
+                messages=tuple(state.session.messages),
+                error_code=_session_error_code(exc),
+                message=message,
+                release_session=False,
+            )
+
+    def _save_execution_checkpoint(
+        self,
+        *,
+        state: _DriveState,
+        phase: RunExecutionCheckpointPhase,
+        current_tool_call_id: str | None = None,
+        current_tool_name: str | None = None,
+    ) -> AgentSession:
+        """把 state 游标保存到 Session.execution_checkpoint。"""
+
+        ownership = _require_ownership(state.ownership)
+        state.session.execution_checkpoint = self._build_execution_checkpoint(
+            ownership=ownership,
+            phase=phase,
+            assistant_message_index=state.current_assistant_message_index,
+            next_tool_call_index=state.next_tool_call_index,
+            current_tool_call_id=current_tool_call_id,
+            current_tool_name=current_tool_name,
+            model_turns=state.model_turns,
+            tool_calls=state.tool_calls,
+            remaining_runtime_seconds=max(
+                0.0,
+                state.active_deadline - self.monotonic_provider(),
+            ),
+            started_at=state.started_at,
+            deadline_at=state.deadline_at,
+        )
+        return self._save_owned_session(state.session, ownership)
+
+    def _save_finalizing_checkpoint(
+        self,
+        *,
+        session: AgentSession,
+        ownership: RunOwnership,
+        model_turns: int,
+        tool_calls: int,
+    ) -> AgentSession:
+        """在清理 owner 前先持久化 FINALIZING 窗口。"""
+
+        existing = session.execution_checkpoint
+        now = self._utc_now()
+        started_at = existing.started_at if existing is not None else now
+        deadline_at = existing.deadline_at if existing is not None else now
+        remaining_runtime_seconds = (
+            existing.remaining_runtime_seconds if existing is not None else 0.0
+        )
+        assistant_message_index = (
+            existing.assistant_message_index if existing is not None else None
+        )
+        next_tool_call_index = (
+            existing.next_tool_call_index if existing is not None else 0
+        )
+        session.execution_checkpoint = self._build_execution_checkpoint(
+            ownership=ownership,
+            phase=RunExecutionCheckpointPhase.FINALIZING,
+            assistant_message_index=assistant_message_index,
+            next_tool_call_index=next_tool_call_index,
+            current_tool_call_id=None,
+            current_tool_name=None,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            remaining_runtime_seconds=remaining_runtime_seconds,
+            started_at=started_at,
+            deadline_at=deadline_at,
+        )
+        return self._save_owned_session(session, ownership)
+
+    def _build_execution_checkpoint(
+        self,
+        *,
+        ownership: RunOwnership,
+        phase: RunExecutionCheckpointPhase,
+        assistant_message_index: int | None,
+        next_tool_call_index: int,
+        current_tool_call_id: str | None,
+        current_tool_name: str | None,
+        model_turns: int,
+        tool_calls: int,
+        remaining_runtime_seconds: float,
+        started_at: datetime,
+        deadline_at: datetime,
+    ) -> RunExecutionCheckpoint:
+        """构造当前 run 的 checkpoint，避免记录消息正文或 Tool arguments。"""
+
+        return RunExecutionCheckpoint(
+            checkpoint_phase=phase,
+            originating_run_id=ownership.run_id,
+            run_fence_generation=ownership.fence_generation,
+            assistant_message_index=assistant_message_index,
+            next_tool_call_index=next_tool_call_index,
+            current_tool_call_id=current_tool_call_id,
+            current_tool_name=current_tool_name,
+            model_turns_used=model_turns,
+            tool_calls_used=tool_calls,
+            remaining_runtime_seconds=remaining_runtime_seconds,
+            started_at=started_at,
+            deadline_at=deadline_at,
+            updated_at=self._utc_now(),
+        )
 
     def _save_owned_session(
         self,
@@ -1296,6 +1462,16 @@ class GenericAgentLoop:
                         ownership=_require_ownership(state.ownership),
                     )
                 if decision.disposition == ToolDisposition.EXECUTE_NOW:
+                    checkpoint_error = self._checkpoint_state_or_result(
+                        trace=trace,
+                        state=state,
+                        phase=RunExecutionCheckpointPhase.TOOL_CALL_IN_FLIGHT,
+                        current_tool_call_id=prepared_call.tool_call_id,
+                        current_tool_name=prepared_call.tool_name,
+                        message="Session could not save tool in-flight checkpoint",
+                    )
+                    if checkpoint_error is not None:
+                        return checkpoint_error
                     heartbeat_error = self._heartbeat_state_or_result(
                         trace=trace,
                         state=state,
@@ -1342,6 +1518,14 @@ class GenericAgentLoop:
                 model_turns=state.model_turns,
                 tool_calls=state.tool_calls,
             )
+            checkpoint_error = self._checkpoint_state_or_result(
+                trace=trace,
+                state=state,
+                phase=RunExecutionCheckpointPhase.DRIVE_READY,
+                message="Session could not save post-tool checkpoint",
+            )
+            if checkpoint_error is not None:
+                return checkpoint_error
 
             if self._deadline_reached(state.active_deadline):
                 return self._limit_reached(
@@ -1371,6 +1555,14 @@ class GenericAgentLoop:
         state.current_assistant_message_index = None
         state.next_tool_call_index = 0
         state.current_originating_run_id = trace.run_id
+        checkpoint_error = self._checkpoint_state_or_result(
+            trace=trace,
+            state=state,
+            phase=RunExecutionCheckpointPhase.DRIVE_READY,
+            message="Session could not save tool-batch checkpoint",
+        )
+        if checkpoint_error is not None:
+            return checkpoint_error
         return None
 
     def _clear_completed_continuation(
@@ -1775,11 +1967,57 @@ class GenericAgentLoop:
                 finish_reason=finish_reason,
             )
 
+        # 调用方可能已经在同一个可变 Session 上写入目标状态字段，例如
+        # WAITING_CONFIRMATION 的 pending_action_id/continuation。FINALIZING
+        # checkpoint 仍属于当前 RUNNING owner，因此保存前必须恢复合法 RUNNING
+        # 形态，随后再保存目标终态并清理 owner。
+        target_pending_action_id = session.pending_action_id
+        target_continuation = session.continuation
+        session.status = AgentSessionStatus.RUNNING
+        if target_status == AgentSessionStatus.WAITING_CONFIRMATION:
+            session.pending_action_id = None
+            session.continuation = None
+        try:
+            session = self._save_finalizing_checkpoint(
+                session=session,
+                ownership=ownership,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+            )
+        except (SessionRunFenceLostError, SessionRunLeaseExpiredError) as exc:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=_session_error_code(exc),
+                message="The agent run could not finalize because session ownership changed.",
+                finish_reason=finish_reason,
+            )
+        except SessionStoreError:
+            return self._reconcile_finalization_failure(
+                trace=trace,
+                expected_session=session,
+                ownership=ownership,
+                expected_version=session.version,
+                target_status=target_status,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+            )
+
         expected_version = session.version
         session.status = target_status
         session.active_run_id = None
         session.active_run_last_heartbeat_at = None
         session.active_run_lease_expires_at = None
+        session.execution_checkpoint = None
+        if target_status == AgentSessionStatus.WAITING_CONFIRMATION:
+            session.pending_action_id = target_pending_action_id
+            session.continuation = target_continuation
         if target_status != AgentSessionStatus.WAITING_CONFIRMATION:
             session.pending_action_id = None
             session.continuation = None
@@ -2151,6 +2389,7 @@ def _session_matches_finalized_target(
         and stored.active_run_id is None
         and stored.active_run_last_heartbeat_at is None
         and stored.active_run_lease_expires_at is None
+        and stored.execution_checkpoint is None
         and stored.run_fence_generation == ownership.fence_generation
         and stored.pending_action_id == expected.pending_action_id
         and stored.continuation == expected.continuation

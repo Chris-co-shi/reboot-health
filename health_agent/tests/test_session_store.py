@@ -3,6 +3,10 @@ from datetime import datetime, timedelta, timezone
 
 from agent.models import ModelMessage, ModelToolCall
 from agent.runtime.continuation import AgentContinuation
+from agent.runtime.execution_checkpoint import (
+    RunExecutionCheckpoint,
+    RunExecutionCheckpointPhase,
+)
 from agent.runtime.session import (
     AgentSession,
     AgentSessionStatus,
@@ -26,6 +30,7 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(session.run_fence_generation, 0)
         self.assertIsNone(session.active_run_last_heartbeat_at)
         self.assertIsNone(session.active_run_lease_expires_at)
+        self.assertIsNone(session.execution_checkpoint)
         self.assertEqual(session.created_at.tzinfo, timezone.utc)
 
     def test_session_normalizes_active_run_id(self) -> None:
@@ -56,6 +61,47 @@ class AgentSessionTest(unittest.TestCase):
                 run_fence_generation=1,
                 active_run_last_heartbeat_at=heartbeat_at,
                 active_run_lease_expires_at=heartbeat_at,
+            )
+
+    def test_non_running_session_rejects_execution_checkpoint(self) -> None:
+        with self.assertRaises(ValueError):
+            AgentSession(
+                session_id="session-1",
+                execution_checkpoint=_checkpoint(),
+            )
+
+    def test_running_session_checkpoint_must_match_owner_and_generation(self) -> None:
+        heartbeat_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        session = AgentSession(
+            session_id="session-1",
+            status=AgentSessionStatus.RUNNING,
+            active_run_id="run-1",
+            run_fence_generation=1,
+            active_run_last_heartbeat_at=heartbeat_at,
+            active_run_lease_expires_at=heartbeat_at + timedelta(seconds=60),
+            execution_checkpoint=_checkpoint(),
+        )
+
+        self.assertEqual(session.execution_checkpoint.originating_run_id, "run-1")
+        with self.assertRaises(ValueError):
+            AgentSession(
+                session_id="session-1",
+                status=AgentSessionStatus.RUNNING,
+                active_run_id="run-other",
+                run_fence_generation=1,
+                active_run_last_heartbeat_at=heartbeat_at,
+                active_run_lease_expires_at=heartbeat_at + timedelta(seconds=60),
+                execution_checkpoint=_checkpoint(),
+            )
+        with self.assertRaises(ValueError):
+            AgentSession(
+                session_id="session-1",
+                status=AgentSessionStatus.RUNNING,
+                active_run_id="run-1",
+                run_fence_generation=2,
+                active_run_last_heartbeat_at=heartbeat_at,
+                active_run_lease_expires_at=heartbeat_at + timedelta(seconds=60),
+                execution_checkpoint=_checkpoint(),
             )
 
     def test_session_saves_complete_message_order(self) -> None:
@@ -222,6 +268,25 @@ def _continuation() -> AgentContinuation:
         tool_calls_used=1,
         started_at=started_at,
         deadline_at=started_at + timedelta(seconds=60),
+    )
+
+
+def _checkpoint() -> RunExecutionCheckpoint:
+    started_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    return RunExecutionCheckpoint(
+        checkpoint_phase=RunExecutionCheckpointPhase.DRIVE_READY,
+        originating_run_id="run-1",
+        run_fence_generation=1,
+        assistant_message_index=None,
+        next_tool_call_index=0,
+        current_tool_call_id=None,
+        current_tool_name=None,
+        model_turns_used=0,
+        tool_calls_used=0,
+        remaining_runtime_seconds=60,
+        started_at=started_at,
+        deadline_at=started_at + timedelta(seconds=60),
+        updated_at=started_at,
     )
 
 

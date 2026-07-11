@@ -5,6 +5,10 @@ from datetime import datetime, timedelta, timezone
 
 from agent.models import ModelMessage, ModelToolCall
 from agent.runtime.continuation import AgentContinuation
+from agent.runtime.execution_checkpoint import (
+    RunExecutionCheckpoint,
+    RunExecutionCheckpointPhase,
+)
 from agent.runtime.pending_action import (
     PendingAction,
     PendingActionStatus,
@@ -44,6 +48,7 @@ class JsonCodecSessionTest(unittest.TestCase):
         self.assertIsNone(loaded.active_run_id)
         self.assertIsNone(loaded.active_run_last_heartbeat_at)
         self.assertIsNone(loaded.active_run_lease_expires_at)
+        self.assertIsNone(loaded.execution_checkpoint)
         self.assertEqual(loaded.created_at, session.created_at)
         self.assertEqual(loaded.updated_at, session.updated_at)
         self.assertEqual(loaded.continuation.next_tool_call_index, 1)
@@ -114,6 +119,24 @@ class JsonCodecSessionTest(unittest.TestCase):
             loaded.active_run_lease_expires_at,
             _fixed_time() + timedelta(seconds=90),
         )
+        self.assertIsNone(loaded.execution_checkpoint)
+
+    def test_running_session_round_trip_preserves_execution_checkpoint(self) -> None:
+        session = _running_session(execution_checkpoint=_checkpoint())
+
+        loaded = session_from_payload(session_to_payload(session))
+
+        self.assertEqual(
+            loaded.execution_checkpoint.checkpoint_phase,
+            RunExecutionCheckpointPhase.DRIVE_READY,
+        )
+        self.assertEqual(loaded.execution_checkpoint.originating_run_id, "run-active")
+        self.assertEqual(loaded.execution_checkpoint.run_fence_generation, 3)
+        self.assertEqual(loaded.execution_checkpoint.assistant_message_index, 1)
+        self.assertEqual(loaded.execution_checkpoint.next_tool_call_index, 2)
+        self.assertEqual(loaded.execution_checkpoint.model_turns_used, 4)
+        self.assertEqual(loaded.execution_checkpoint.tool_calls_used, 5)
+        self.assertEqual(loaded.execution_checkpoint.remaining_runtime_seconds, 12.5)
 
     def test_v1_session_payload_is_migrated_without_rewriting_schema(self) -> None:
         payload = session_to_payload(_session())
@@ -121,12 +144,14 @@ class JsonCodecSessionTest(unittest.TestCase):
         del payload["data"]["run_fence_generation"]
         del payload["data"]["active_run_last_heartbeat_at"]
         del payload["data"]["active_run_lease_expires_at"]
+        del payload["data"]["execution_checkpoint"]
 
         loaded = session_from_payload(payload)
 
         self.assertEqual(loaded.status, AgentSessionStatus.WAITING_CONFIRMATION)
         self.assertEqual(loaded.run_fence_generation, 0)
         self.assertIsNone(loaded.active_run_id)
+        self.assertIsNone(loaded.execution_checkpoint)
 
     def test_v1_running_session_payload_is_migrated_as_stale(self) -> None:
         payload = session_to_payload(_running_session())
@@ -134,6 +159,7 @@ class JsonCodecSessionTest(unittest.TestCase):
         del payload["data"]["run_fence_generation"]
         del payload["data"]["active_run_last_heartbeat_at"]
         del payload["data"]["active_run_lease_expires_at"]
+        del payload["data"]["execution_checkpoint"]
 
         loaded = session_from_payload(payload)
 
@@ -141,6 +167,18 @@ class JsonCodecSessionTest(unittest.TestCase):
         self.assertEqual(loaded.run_fence_generation, 1)
         self.assertEqual(loaded.active_run_id, "run-active")
         self.assertEqual(loaded.active_run_lease_expires_at, loaded.updated_at)
+        self.assertIsNone(loaded.execution_checkpoint)
+
+    def test_v2_session_payload_is_migrated_without_execution_checkpoint(self) -> None:
+        payload = session_to_payload(_running_session())
+        payload["schema_version"] = 2
+        del payload["data"]["execution_checkpoint"]
+
+        loaded = session_from_payload(payload)
+
+        self.assertEqual(loaded.status, AgentSessionStatus.RUNNING)
+        self.assertEqual(loaded.run_fence_generation, 3)
+        self.assertIsNone(loaded.execution_checkpoint)
 
 
 class JsonCodecPendingActionTest(unittest.TestCase):
@@ -264,7 +302,10 @@ def _session() -> AgentSession:
     )
 
 
-def _running_session() -> AgentSession:
+def _running_session(
+    *,
+    execution_checkpoint: RunExecutionCheckpoint | None = None,
+) -> AgentSession:
     started_at = _fixed_time()
     return AgentSession(
         session_id="session-1",
@@ -274,8 +315,28 @@ def _running_session() -> AgentSession:
         run_fence_generation=3,
         active_run_last_heartbeat_at=started_at,
         active_run_lease_expires_at=started_at + timedelta(seconds=90),
+        execution_checkpoint=execution_checkpoint,
         version=4,
         created_at=started_at,
+        updated_at=started_at + timedelta(seconds=1),
+    )
+
+
+def _checkpoint() -> RunExecutionCheckpoint:
+    started_at = _fixed_time()
+    return RunExecutionCheckpoint(
+        checkpoint_phase=RunExecutionCheckpointPhase.DRIVE_READY,
+        originating_run_id="run-active",
+        run_fence_generation=3,
+        assistant_message_index=1,
+        next_tool_call_index=2,
+        current_tool_call_id=None,
+        current_tool_name=None,
+        model_turns_used=4,
+        tool_calls_used=5,
+        remaining_runtime_seconds=12.5,
+        started_at=started_at,
+        deadline_at=started_at + timedelta(seconds=60),
         updated_at=started_at + timedelta(seconds=1),
     )
 

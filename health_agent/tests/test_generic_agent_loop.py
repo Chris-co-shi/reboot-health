@@ -483,7 +483,7 @@ class GenericAgentLoopLimitTest(unittest.TestCase):
         result = _run(
             provider,
             limits=GenericLoopLimits(timeout_seconds=1),
-            monotonic_provider=ControlledClock([0, 0, 2]),
+            monotonic_provider=ControlledClock([0, 0, 0, 2]),
         )
 
         self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)
@@ -510,7 +510,7 @@ class GenericAgentLoopLimitTest(unittest.TestCase):
             provider,
             registry=_convert_registry(),
             limits=GenericLoopLimits(timeout_seconds=1),
-            monotonic_provider=ControlledClock([0, 0, 0, 0, 0, 2]),
+            monotonic_provider=ControlledClock([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
         )
 
         self.assertEqual(result.status, GENERIC_STATUS_LIMIT_REACHED)

@@ -15,6 +15,10 @@ from typing import Any, Mapping
 from agent.models import ModelMessage, ModelToolCall
 from agent.models.base import mutable_mapping
 from agent.runtime.continuation import AgentContinuation
+from agent.runtime.execution_checkpoint import (
+    RunExecutionCheckpoint,
+    RunExecutionCheckpointPhase,
+)
 from agent.runtime.pending_action import PendingAction
 from agent.runtime.session import AgentSession, AgentSessionStatus
 from agent.runtime.storage.errors import (
@@ -22,9 +26,10 @@ from agent.runtime.storage.errors import (
     JsonStoreUnsupportedSchema,
 )
 
-SESSION_SCHEMA_VERSION = 2
+SESSION_SCHEMA_VERSION = 3
 PENDING_ACTION_SCHEMA_VERSION = 1
 SCHEMA_VERSION = SESSION_SCHEMA_VERSION
+_SUPPORTED_SESSION_SCHEMA_VERSIONS = {1, 2, SESSION_SCHEMA_VERSION}
 SESSION_ENTITY_TYPE = "agent_session"
 PENDING_ACTION_ENTITY_TYPE = "pending_action"
 
@@ -69,6 +74,11 @@ def session_to_payload(session: AgentSession) -> dict[str, Any]:
                 if session.active_run_lease_expires_at is not None
                 else None
             ),
+            "execution_checkpoint": (
+                _checkpoint_to_json(session.execution_checkpoint)
+                if session.execution_checkpoint is not None
+                else None
+            ),
             "version": session.version,
             "created_at": _datetime_to_json(session.created_at),
             "updated_at": _datetime_to_json(session.updated_at),
@@ -91,7 +101,7 @@ def session_from_payload(
     data, schema_version = _unwrap_payload(
         payload,
         entity_type=SESSION_ENTITY_TYPE,
-        supported_versions={1, SESSION_SCHEMA_VERSION},
+        supported_versions=_SUPPORTED_SESSION_SCHEMA_VERSIONS,
     )
     required_fields = {
         "session_id",
@@ -117,6 +127,8 @@ def session_from_payload(
                 "active_run_lease_expires_at",
             }
         )
+    if schema_version >= 3:
+        required_fields.add("execution_checkpoint")
     _require_fields(data, required_fields)
     session_id = _require_non_empty_string(data["session_id"], "session_id")
     if expected_session_id is not None and session_id != expected_session_id:
@@ -139,6 +151,10 @@ def session_from_payload(
             status=status,
             heartbeat_at=heartbeat_at,
         )
+        execution_checkpoint = _session_checkpoint_from_json(
+            data,
+            schema_version=schema_version,
+        )
         return AgentSession(
             session_id=session_id,
             status=status,
@@ -153,6 +169,7 @@ def session_from_payload(
             run_fence_generation=run_fence_generation,
             active_run_last_heartbeat_at=heartbeat_at,
             active_run_lease_expires_at=lease_expires_at,
+            execution_checkpoint=execution_checkpoint,
             version=_non_negative_int(data["version"], "version"),
             created_at=_datetime_from_json(data["created_at"], "created_at"),
             updated_at=_datetime_from_json(data["updated_at"], "updated_at"),
@@ -309,6 +326,112 @@ def loads_payload(text: str) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise JsonStoreDataCorrupted("Store JSON top-level value must be an object")
     return payload
+
+
+def _checkpoint_to_json(checkpoint: RunExecutionCheckpoint) -> dict[str, Any]:
+    return {
+        "checkpoint_phase": checkpoint.checkpoint_phase.value,
+        "originating_run_id": checkpoint.originating_run_id,
+        "run_fence_generation": checkpoint.run_fence_generation,
+        "assistant_message_index": checkpoint.assistant_message_index,
+        "next_tool_call_index": checkpoint.next_tool_call_index,
+        "current_tool_call_id": checkpoint.current_tool_call_id,
+        "current_tool_name": checkpoint.current_tool_name,
+        "model_turns_used": checkpoint.model_turns_used,
+        "tool_calls_used": checkpoint.tool_calls_used,
+        "remaining_runtime_seconds": checkpoint.remaining_runtime_seconds,
+        "started_at": _datetime_to_json(checkpoint.started_at),
+        "deadline_at": _datetime_to_json(checkpoint.deadline_at),
+        "updated_at": _datetime_to_json(checkpoint.updated_at),
+    }
+
+
+def _session_checkpoint_from_json(
+    data: Mapping[str, Any],
+    *,
+    schema_version: int,
+) -> RunExecutionCheckpoint | None:
+    if schema_version < 3:
+        return None
+    value = data["execution_checkpoint"]
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise JsonStoreDataCorrupted("execution_checkpoint must be an object")
+    _require_fields(
+        value,
+        {
+            "checkpoint_phase",
+            "originating_run_id",
+            "run_fence_generation",
+            "assistant_message_index",
+            "next_tool_call_index",
+            "current_tool_call_id",
+            "current_tool_name",
+            "model_turns_used",
+            "tool_calls_used",
+            "remaining_runtime_seconds",
+            "started_at",
+            "deadline_at",
+            "updated_at",
+        },
+    )
+    return RunExecutionCheckpoint(
+        checkpoint_phase=RunExecutionCheckpointPhase(
+            _require_non_empty_string(
+                value["checkpoint_phase"],
+                "execution_checkpoint.checkpoint_phase",
+            )
+        ),
+        originating_run_id=_require_non_empty_string(
+            value["originating_run_id"],
+            "execution_checkpoint.originating_run_id",
+        ),
+        run_fence_generation=_non_negative_int(
+            value["run_fence_generation"],
+            "execution_checkpoint.run_fence_generation",
+        ),
+        assistant_message_index=_optional_non_negative_int(
+            value["assistant_message_index"],
+            "execution_checkpoint.assistant_message_index",
+        ),
+        next_tool_call_index=_non_negative_int(
+            value["next_tool_call_index"],
+            "execution_checkpoint.next_tool_call_index",
+        ),
+        current_tool_call_id=_optional_string(
+            value["current_tool_call_id"],
+            "execution_checkpoint.current_tool_call_id",
+        ),
+        current_tool_name=_optional_string(
+            value["current_tool_name"],
+            "execution_checkpoint.current_tool_name",
+        ),
+        model_turns_used=_non_negative_int(
+            value["model_turns_used"],
+            "execution_checkpoint.model_turns_used",
+        ),
+        tool_calls_used=_non_negative_int(
+            value["tool_calls_used"],
+            "execution_checkpoint.tool_calls_used",
+        ),
+        remaining_runtime_seconds=_non_negative_number(
+            value["remaining_runtime_seconds"],
+            "execution_checkpoint.remaining_runtime_seconds",
+        ),
+        started_at=_datetime_from_json(
+            value["started_at"],
+            "execution_checkpoint.started_at",
+        ),
+        deadline_at=_datetime_from_json(
+            value["deadline_at"],
+            "execution_checkpoint.deadline_at",
+        ),
+        updated_at=_datetime_from_json(
+            value["updated_at"],
+            "execution_checkpoint.updated_at",
+        ),
+    )
 
 
 def _session_run_fence_generation_from_json(
@@ -567,6 +690,12 @@ def _non_negative_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise JsonStoreDataCorrupted(f"{field_name} must be a non-negative integer")
     return value
+
+
+def _optional_non_negative_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _non_negative_int(value, field_name)
 
 
 def _non_negative_number(value: Any, field_name: str) -> float:
