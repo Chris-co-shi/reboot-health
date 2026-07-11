@@ -10,7 +10,7 @@
   <img alt="Runtime" src="https://img.shields.io/badge/Runtime-OpenAI--compatible-111827">
 </p>
 
-**LLM 负责理解用户任务并决定下一步动作；Agent Runtime 负责模型回合、上下文和运行限制；确定性代码负责工具执行、安全边界、确认、持久化、幂等和审计。**
+**LLM 负责理解用户任务并决定下一步动作；Agent Runtime 负责模型回合、消息历史、工具调度和运行限制；确定性代码负责工具执行、安全边界、确认、持久化、幂等和审计。**
 
 </div>
 
@@ -18,32 +18,46 @@
 
 ## Current Status
 
-当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，并默认进入通用 `GenericAgentLoop`；`INITIAL_PLANNING` 兼容层已完成去污染并只作为显式 legacy compatibility 入口保留。
-
-当前阶段：
+当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，并默认进入通用 `GenericAgentLoop`；`INITIAL_PLANNING` 只作为显式 legacy compatibility 入口保留。
 
 ```text
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
 Phase 2A 通用只读 Tool Call Agent Loop：DONE
-Phase 2B Runtime 确认、恢复与 JSON 持久化基础：DONE（显式启用）
-Phase 2B 只读健康上下文工具：TODO
+Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础：DONE_EXPLICIT
+Phase 2C Interactive Session & Conversation Context：READY / NEXT
+Phase 3A 健康领域只读工具：TODO
+Phase 3B 产品级 Safety Guard：TODO
 ```
 
-Phase 2A 的已确认实施规范：
+当前权威计划：
 
-[`docs/implementation/phase-2a-read-only-tool-call-loop.md`](docs/implementation/phase-2a-read-only-tool-call-loop.md)
+[`docs/mvp-exec-plan.md`](docs/mvp-exec-plan.md)
 
-尚未实现：
+当前 Phase 2C 实施规范：
 
-- 只读健康上下文工具。
-- Console/API 的确认、拒绝和恢复入口。
-- 后台 orphan cleanup worker。
-- 正式写操作 Tool。
-- FastAPI 产品 API。
-- 数据库、Memory、完整 Safety Guard。
-- Plan 发布与 legacy 业务语义迁移。
+[`docs/implementation/phase-2c-interactive-session-cli.md`](docs/implementation/phase-2c-interactive-session-cli.md)
 
-仓库中仍保留历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 代码；这些目录属于 legacy。Java/Python HTTP 链路和旧 Compose 启动链路当前不可用，不代表当前产品入口。
+## Current User Experience
+
+当前 `agent.main` 和 `scripts/agent_console.py` 是 **one-shot CLI**：
+
+```text
+一次用户输入
+→ GenericAgentLoop
+→ 模型直接回答或调用只读工具
+→ 最终答案
+→ 进程结束
+```
+
+需要明确：
+
+- 单次 Agent Run 内可以发生多次模型回合和 Tool Call。
+- 不同命令之间默认没有对话连续性。
+- 当前 console 不能在 Agent 提问后等待下一次用户输入。
+- 默认入口使用内存 Store，退出进程后 Session 消失。
+- JSON Store 已实现，但需要调用方显式启用，尚未接入默认 CLI。
+
+Phase 2C 将新增交互式 CLI，使同一个 Session 能连续对话，并支持显式 JSON 恢复。
 
 ## Current Runtime Shape
 
@@ -59,32 +73,25 @@ Phase 2A 的已确认实施规范：
 → AgentRunResult
 ```
 
-显式启用本地 JSON Store 时，Runtime 可持久化 Session、PendingAction、RUNNING lease、
-execution checkpoint，并提供 stale recovery 与 orphan PendingAction 维护工具。默认
-`agent.main` 和 `scripts/agent_console.py` 仍使用内存 Store。
-
-当前确认/恢复能力是 Runtime 基础协议，不等同于 Console/API 已提供用户操作入口，也不代表正式写操作 Tool 已上线。
-
-历史 `INITIAL_PLANNING` 兼容入口：
+当前正式产品工具只有：
 
 ```text
-用户输入
-→ legacy compatibility adapter
-→ INITIAL_PLANNING 兼容解析
+convert_weight_unit：kg / lb / jin 确定性换算
 ```
+
+显式启用 JSON Store 时，Runtime 可持久化 Session、PendingAction、RUNNING lease 和 execution checkpoint，并提供 stale recovery 与 orphan PendingAction 维护能力。
+
+底层 Confirmation/Recovery 协议不等同于产品 CLI/API 已提供批准、拒绝和恢复入口，也不代表正式写操作 Tool 已上线。
 
 ## Python Quick Start
 
-```bash
-cd health_agent
-python3 -m compileall agent tests
-python3 -m unittest discover -s tests
-```
-
-真实 Provider 配置：
+### 1. 环境
 
 ```bash
 cd health_agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 cp .env.example .env
 ```
 
@@ -97,26 +104,64 @@ LLM_MODEL=your-model-name
 LLM_TIMEOUT_SECONDS=60
 ```
 
-也可以使用 shell 环境变量；shell 中的值优先于 `.env`。
+shell 环境变量优先于 `.env`。缺少必要模型配置时，产品入口会明确失败，不会回退测试替身。
 
-本地入口：
+### 2. 当前直接使用
 
 ```bash
 cd health_agent
-python3 -m agent.main
-python3 scripts/agent_console.py --user-text "想从低强度恢复训练"
+python3 -m agent.main --user-text "190 斤是多少公斤？请调用工具计算。"
+python3 scripts/agent_console.py --user-text "用简单的话解释渐进超负荷。"
 ```
 
-缺少必要模型配置时，产品入口会直接失败，不会回退到测试替身。
+每个命令都是一次独立用户请求。
+
+### 3. 验证
+
+```bash
+cd health_agent
+python3 -m compileall agent tests
+python3 -m unittest discover -s tests -v
+```
+
+## Session、Context 与 Memory
+
+项目明确区分：
+
+```text
+Session Message History ≠ 长期 Memory
+Conversation Summary ≠ 已确认健康事实
+UserProfile / HealthConstraint / Plan ≠ 模型记忆
+Memory Candidate ≠ 自动生效的领域事实
+```
+
+详细决策：
+
+[`docs/decisions/0011-session-context-memory-boundaries.md`](docs/decisions/0011-session-context-memory-boundaries.md)
+
+## 尚未实现
+
+- 交互式连续聊天 CLI。
+- 默认入口 Session 持久化与恢复。
+- 真实用户档案、健康约束、计划和训练记录读取。
+- Console/API 的确认、拒绝和恢复入口。
+- 正式写操作 Tool 与计划发布。
+- FastAPI 产品 API。
+- 数据库、完整 Safety Guard 和正式 Memory Candidate 闭环。
+- Flutter/Web 正式客户端链路。
+
+仓库中保留的 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 属于 legacy。旧 Java/Python HTTP 链路和 Compose 启动链路当前不可用，不代表当前产品入口。
 
 ## Documentation
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/product-scope.md`](docs/product-scope.md) | 产品定位、体验、范围与非目标 |
 | [`docs/architecture.md`](docs/architecture.md) | 当前 Python 模块化单体与 Agent Runtime 架构 |
 | [`docs/mvp-exec-plan.md`](docs/mvp-exec-plan.md) | 当前阶段、状态、范围和验收 |
-| [`docs/implementation/phase-2a-read-only-tool-call-loop.md`](docs/implementation/phase-2a-read-only-tool-call-loop.md) | Phase 2A 的 IDE/人工开发交接规范 |
-| [`docs/decisions/0010-python-modular-monolith-and-agent-loop.md`](docs/decisions/0010-python-modular-monolith-and-agent-loop.md) | 当前长期架构决策 |
+| [`docs/implementation/phase-2c-interactive-session-cli.md`](docs/implementation/phase-2c-interactive-session-cli.md) | 当前 Phase 2C 工程交接规范 |
+| [`docs/decisions/0010-python-modular-monolith-and-agent-loop.md`](docs/decisions/0010-python-modular-monolith-and-agent-loop.md) | Python-first 与通用 Agent Loop 决策 |
+| [`docs/decisions/0011-session-context-memory-boundaries.md`](docs/decisions/0011-session-context-memory-boundaries.md) | Session、Context、Memory 与领域事实边界 |
 | [`health_agent/README.md`](health_agent/README.md) | Python Runtime 入口和验证 |
 | [`AGENTS.md`](AGENTS.md) | 仓库级协作与边界规则 |
 | [`docs/`](docs/README.md) | 文档索引与阅读路径 |
