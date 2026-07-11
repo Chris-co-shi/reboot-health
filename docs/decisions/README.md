@@ -2,39 +2,53 @@
 
 # Architecture Decision Records
 
-### Confirmed product and architecture decisions for reboot-health
+### Approved and superseded decisions for reboot-health
 
-<img alt="ADR" src="https://img.shields.io/badge/Format-ADR-6C5CE7">
-<img alt="Status" src="https://img.shields.io/badge/Scope-Confirmed%20Decisions-00B894">
+![ADR](https://img.shields.io/badge/Format-ADR-6C5CE7)
+![Architecture](https://img.shields.io/badge/Architecture-FROZEN-00B894)
 
 </div>
 
-> 本目录只记录已经确认、需要长期保留的产品和架构决策。未确认事项应留在对应权威文档中，并标记为 `OPEN`、`NEEDS_TECHNICAL_SPIKE` 或 `NEEDS_MEDICAL_REVIEW`。
+> ADR 记录重大决策及其演进。当前有效产品和工程规则仍必须同步体现在 `docs/` 权威文档中。历史 ADR 不能覆盖 2026-07-12 冻结文档。
 
 ## Decision index
 
-| ID | Decision | Status | Summary |
+| ID | Decision | Status | Current meaning |
 |---|---|---|---|
-| [0001](0001-personal-single-user-scope.md) | 单人个人使用范围 | 已确认 | 私有单用户优先，但保留明确数据归属边界 |
-| [0002](0002-modular-monolith.md) | 模块化单体架构 | 已扩展 | 保持单体部署和模块边界；当前 Python 实现方向见 0010 |
-| [0003](0003-ai-proposal-only.md) | AI 候选与确认边界 | 已确认 | AI 生成候选；重要变化需确认；低风险调整可受控执行 |
-| [0004](0004-windows-docker-postgresql.md) | Docker 与 PostgreSQL 17 | 历史待迁移 | 描述旧部署与数据库运行方式，不代表当前 Python Runtime 已接入 |
-| [0005](0005-frontend-pnpm.md) | 前端使用 pnpm | 历史 | Vue 内部调试工具的包管理方式 |
-| [0006](0006-redis-not-in-mvp.md) | Redis 暂不进入 MVP | 已确认 | 当前阶段避免引入非必要基础设施 |
-| [0007](0007-plan-version-idempotency.md) | 计划版本和 POST 幂等 | 语义保留待迁移 | 后续 Python 实现仍需保留版本、revision 与幂等语义 |
-| [0008](0008-m25a-flutter-agent-device-bootstrap.md) | Flutter、Runtime 与设备初始化 | 历史 | 旧多运行时技术骨架，不作为当前实施入口 |
-| [0009](0009-ai-first-product-and-module-boundaries.md) | Health Agent Harness 与 Java 领域内核 | 已替代 | 旧 Python/Java/Flutter 职责划分，由 0010 替代 |
-| [0010](0010-python-modular-monolith-and-agent-loop.md) | Python 模块化单体与通用 Agent Loop | 已确认 | Python 是当前与目标 Runtime；按有限轮次 Tool Call Loop 和纵向切片演进 |
-| [0011](0011-session-context-memory-boundaries.md) | Session、Context、Memory 与领域事实边界 | 已确认 | 连续对话、上下文摘要、领域事实和 Memory Candidate 分层管理 |
+| [0001](0001-personal-single-user-scope.md) | 单人个人使用范围 | 已扩展 | 第一阶段单用户，但所有数据保留 userId 隔离和未来多用户边界 |
+| [0002](0002-modular-monolith.md) | 模块化单体架构 | 已替代 | 由 0012 的 Health Platform + health-agent 双服务替代 |
+| [0003](0003-ai-proposal-only.md) | AI 候选与确认边界 | 已扩展 | 由 0014 细化 Fact、Plan、Risk 与人工决定权 |
+| [0004](0004-windows-docker-postgresql.md) | Docker 与 PostgreSQL 17 | 已替代 | 由 0017 的六 VM Kubernetes 正式拓扑替代 |
+| [0005](0005-frontend-pnpm.md) | 前端使用 pnpm | 历史实现约束 | 仅适用于对应 Vue 工程，不决定系统架构 |
+| [0006](0006-redis-not-in-mvp.md) | Redis 暂不进入 MVP | 已替代 | 由 0013 的 Redis Streams 调度和 PostgreSQL 权威替代 |
+| [0007](0007-plan-version-idempotency.md) | 计划版本和 POST 幂等 | 已扩展 | 关键语义保留，并由 0014/API 合同扩展 |
+| [0008](0008-m25a-flutter-agent-device-bootstrap.md) | Flutter、Runtime 与设备初始化 | 历史 | 旧多运行时技术骨架；Flutter 目标客户端以冻结文档为准 |
+| [0009](0009-ai-first-product-and-module-boundaries.md) | Java 领域内核与 Python Agent | 已替代 | 先由 0010 替代，现最终由 0012 替代 |
+| [0010](0010-python-modular-monolith-and-agent-loop.md) | Python 模块化单体与通用 Agent Loop | 部分保留/架构已替代 | Agent Loop 语义保留；单体目标由 0012、0013、0017 替代 |
+| [0011](0011-session-context-memory-boundaries.md) | Session、Context、Memory 与领域事实边界 | 已扩展 | 基础分层保留，由 0015 和冻结文档扩展 |
+| [0012](0012-health-platform-and-agent-service-split.md) | Health Platform 与 health-agent 服务拆分 | 已确认 | 业务权威与通用执行层独立部署 |
+| [0013](0013-durable-agent-execution-and-event-sync.md) | 持久异步执行、调度与事件同步 | 已确认 | PostgreSQL 权威、Redis Streams、Outbox/Inbox 和对账 |
+| [0014](0014-facts-plans-risks-and-human-authority.md) | Fact、Plan、风险与人工决定权 | 已确认 | 候选、逐项确认、Plan 发布、历史纠正和风险二次确认 |
+| [0015](0015-context-rag-and-subagent-boundaries.md) | Context、RAG 与 Sub-Agent | 已确认 | 结构化 Summary、pgvector 和一层顺序委派 |
+| [0016](0016-sandbox-secrets-and-file-lifecycle.md) | Sandbox、Secret 与文件生命周期 | 已确认 | 不可信执行隔离、Platform Secret 中心、MinIO 和彻底删除 |
+| [0017](0017-kubernetes-six-vm-and-architecture-freeze.md) | 六 VM Kubernetes 与架构冻结 | 已确认 | 全组件 K8s、灰度、单宿主机风险和 docs-first 治理 |
 
 ## Status rules
 
-- `已确认`：当前有效决策。
-- `已扩展`：仍有效，但由后续 ADR 补充。
-- `已替代`：保留历史，正文必须链接替代它的 ADR。
-- `历史`：只描述旧阶段事实，不作为当前实施依据。
-- `语义保留待迁移`：旧实现不再扩展，但关键业务语义必须在后续 Python 迁移中保留。
+- `已确认`：当前有效，且已同步到权威文档。
+- `已扩展`：核心方向仍有效，但后续 ADR/权威文档提供完整规则。
+- `部分保留/架构已替代`：历史实现语义继续复用，但目标部署或职责划分已经改变。
+- `已替代`：不再作为当前实现依据，只用于理解历史。
+- `历史`：记录旧阶段事实，不进入当前阅读路径。
 
-不要删除历史 ADR，也不要把路线设想、实现笔记或临时 TODO 写成架构决策。
+## Change rule
 
-返回[项目 README](../../README.md)或查看[架构方案](../architecture.md)。
+新增或替代 ADR 时必须：
+
+1. 更新本索引。
+2. 更新所有受影响的权威文档。
+3. 更新 `PHASE_STATUS.md` 的影响和实施阶段。
+4. 经过用户人工批准。
+5. 批准前不得修改代码或生成实施提示词。
+
+返回[文档首页](../README.md)。

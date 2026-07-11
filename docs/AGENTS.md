@@ -1,98 +1,127 @@
 # 文档治理规则
 
-## 唯一事实来源
+## 1. 架构状态
 
-- 产品定位、体验和范围：`product-scope.md`
-- 系统组件、职责、调用和信任边界：`architecture.md`
-- 业务聚合和不变量：`domain-model.md`
-- 历史已实现 API、数据库和迁移参考：`api-db.md`
-- 健康与系统安全规则：`safety-rules.md`
-- 当前阶段、范围、状态和验收结果：`mvp-exec-plan.md`
-- 已确认重大决策：`decisions/`
-- 已确认阶段的文件级实施交接：`implementation/`
-- README 只做项目或模块入口、核心价值和真实状态摘要。
+```text
+FROZEN since 2026-07-12
+```
 
-一条信息只能在一个权威文档中完整描述，其他文档使用链接或一句摘要。
+`docs/README.md` 列出的文档是唯一事实来源。旧文件名、旧 Phase 路线、聊天摘要和代码注释不能覆盖冻结文档。
 
-## Implementation 规范
+## 2. 唯一职责
 
-`implementation/` 只允许保存已经在 `mvp-exec-plan.md` 中标记为 `READY` 或 `IN_PROGRESS` 的阶段规范。
+- 产品和用户体验：`PRODUCT_REQUIREMENTS.md`
+- 服务、组件、数据流和信任边界：`SYSTEM_ARCHITECTURE.md`
+- 领域对象和不变量：`DOMAIN_MODEL.md`
+- 状态与转换：`STATE_MACHINES.md`
+- API、事件、幂等和错误合同：`API_CONTRACTS.md`
+- 身份、Sandbox、Secret、隐私和删除：`SECURITY_AND_PRIVACY.md`
+- Kubernetes、存储、灰度、备份、监控和恢复：`DEPLOYMENT_AND_OPERATIONS.md`
+- 阶段、状态、验收、阻塞和路线：`PHASE_STATUS.md`
+- 重大决策：`decisions/`
+- 已批准 Slice 的工程交接：`implementation/`
 
-实施规范可以包含：
+相同事实只允许在一个文档中完整定义，其他文档链接或摘要。
 
-- Primary Module、Allowed Paths、Forbidden Paths。
-- 文件级修改建议和实施顺序。
-- Contract 草案、伪代码和错误策略。
-- 测试矩阵、真实环境验收和 Definition of Done。
-- IDE Agent/人工开发的完成报告模板。
+## 3. 优先级
 
-实施规范不得：
+```text
+已批准 ADR
+→ 产品/安全
+→ 架构/领域
+→ 状态机/API
+→ 部署运维
+→ Phase/implementation
+→ 代码、测试、提示词
+```
 
-- 自己声明阶段已经完成。
-- 重复完整架构背景或产品范围。
-- 提前实现后续阶段设计。
-- 把未确认方案写成长期架构决策。
+ADR 结论必须同步到主文档。只更新 ADR 不算完成变更。
 
-阶段完成状态只能更新在 `mvp-exec-plan.md`；长期有效决策进入 ADR。
+## 4. Architecture Freeze 变更流程
 
-## README 视觉与结构规范
+任何架构变化必须：
 
-所有 `README.md` 必须保持现代、简洁、可扫描：
+1. 写明背景、替代方案和影响。
+2. 新增或更新 ADR。
+3. 更新所有受影响权威文档。
+4. 更新 `PHASE_STATUS.md`。
+5. 用户人工批准。
+6. 批准后才能创建 implementation 规范和代码任务。
 
-- 顶部优先使用居中标题、短副标题和少量静态技术徽章。
-- 徽章只能表达稳定事实；没有真实 CI 时禁止伪造 build、coverage 或 release 状态。
-- 首屏必须回答：这是什么、解决什么问题、当前是否可用。
-- 优先使用短段落、表格、Mermaid、代码块和清晰状态提示。
-- 每个一级运行时目录应有模块 README，包含定位、职责边界、当前状态、运行或验证命令、相关文档。
-- 使用当前术语：Python-first 模块化单体、Agent Runtime、ModelProvider、Tool Runtime、legacy compatibility adapter。
-- 历史 Java Health Domain Kernel、Flutter Client 和 Vue Debug Tool 只在 legacy/迁移上下文中使用。
-- 命令必须可复制；未验证命令和平台必须明确标注。
-- 不重复完整架构、字段清单或实施规范，使用链接指向权威文档。
-- 不使用会快速失效的截图、营销数字或未经验证的能力描述。
+禁止用代码、数据库迁移、K8s YAML、Issue、PR 或提示词反向修改架构。
 
-## 状态表达
+## 5. Implementation 规范
 
-必须明确区分：
+`implementation/` 只保存 `READY` 或 `IN_PROGRESS` Slice。
 
-- `DONE`：自动化验证和要求的真实运行验收都完成。
-- `DONE_EXPLICIT`：自动化验收完成，但能力需要显式启用或显式调用，尚非默认产品流程。
-- `READY`：范围、设计和验收标准已确认，可以开始实现。
-- `IN_PROGRESS`：正在实施。
-- `IMPLEMENTED_WITH_BLOCKERS`：主体存在，但仍有关键验收阻塞。
-- `TODO`：尚未开始。
-- `BLOCKED`：被依赖或未确认事项阻塞。
-- `OPEN`：用户尚未确认。
-- `NEEDS_TECHNICAL_SPIKE`：技术可行性待验证。
-- `NEEDS_MEDICAL_REVIEW`：具体医学规则缺少专业依据。
+必须包含：
 
-本地未提交、未构建、未运行真实链路或只通过 Mock 的能力不得写成 `DONE`。
+- Phase/Slice。
+- Primary Module。
+- Authoritative Documents。
+- Allowed/Forbidden Paths。
+- Contract Changes。
+- Migration/Compatibility。
+- Required Verification。
+- Definition of Done。
+- Out of Scope。
+- Completion Report Template。
 
-## 文档边界
+不得：
 
-- README 不保存完整路线、字段清单或详细设计。
-- product-scope 不写表结构、类名和接口路径。
-- architecture 不复制完整测试用例或逐文件操作步骤。
-- implementation 不重复阶段状态和长期架构背景。
-- domain-model 只描述业务语义，不收纳纯技术运行模型字段表。
-- api-db 记录历史已实现合同和后续迁移参考，不得暗示旧链路当前可运行。
-- mvp-exec-plan 只维护阶段范围、状态、验收和阻塞。
-- ADR 只记录已经确认且长期有效的决策；被替代时必须标记。
-- 未确认设想先标记 OPEN，确认后进入 ADR、里程碑或 implementation 规范。
+- 自己声明完成。
+- 重复或修改长期架构。
+- 一次实现整个 Phase。
+- 提前实现后续能力。
+- 将技术 Spike 结果直接写成已批准决策。
 
-## 变更规则
+## 6. 状态表达
 
-- 修改一个权威事实时，检查并删除其他文档中的重复或冲突描述。
-- 新增 implementation 规范时，必须同步 `implementation/README.md`、`docs/README.md` 和 `mvp-exec-plan.md`。
-- 新增或替代 ADR 时，必须同步 `decisions/README.md`，被替代 ADR 正文必须链接新 ADR。
-- 删除文档时更新所有索引和相对链接。
-- 不为让文档显得完整而虚构字段、阈值、状态或平台能力。
-- 医疗阈值没有依据时统一标记 `NEEDS_MEDICAL_REVIEW`。
-- 文档示例不得包含真实健康资料、真实网络地址或凭据。
+状态以 `PHASE_STATUS.md` 定义为准。
 
-## 验证
+- 没有真实验收不能写 `DONE`。
+- 文档完成不能代表代码完成。
+- 代码存在但默认路径未接入时使用 `DONE_EXPLICIT` 或 `IMPLEMENTED_WITH_BLOCKERS`。
+- 医学阈值没有专业审核时使用 `NEEDS_MEDICAL_REVIEW`。
 
-- 检查所有相对链接有效。
-- 搜索已删除文档名和过时阶段名。
-- 检查当前状态是否与代码和真实验收一致。
-- 执行 `git diff --check`。
-- 文档治理任务不得修改 Java、Python、Flutter、Vue 或部署业务代码。
+## 7. 删除和历史
+
+- 被新体系替代的重复权威文档应删除，历史通过 Git 追溯。
+- 历史 ADR 保留，但必须明确已替代/历史状态。
+- 完成阶段的临时 implementation 规范在证据汇总到 `PHASE_STATUS.md` 后可以删除。
+- legacy 代码不属于文档治理任务；删除前必须有独立迁移 Slice 和验收。
+- 删除文件时必须更新所有 README、AGENTS 和相对链接。
+
+## 8. 提示词
+
+任何实施提示词都必须引用：
+
+- `AGENTS.md`
+- `docs/README.md`
+- `docs/PHASE_STATUS.md`
+- 相关权威文档和 ADR
+- 当前 implementation 规范
+
+提示词不得重新叙述一套与文档不同的架构。发现冲突必须停止并报告。
+
+## 9. 隐私
+
+文档示例不得包含：
+
+- 真实健康资料。
+- 真实 API Key、Token、密码或证书。
+- 本机绝对路径和真实内部地址。
+- 完整 Prompt、隐藏推理或敏感 Tool 原文。
+
+## 10. 验证
+
+文档变更至少检查：
+
+- 相对链接。
+- 旧文件名和旧 Phase 名是否仍被当前文档引用。
+- ADR 状态和替代关系。
+- 当前实现事实与 `PHASE_STATUS.md` 是否一致。
+- 不同文档中状态名、服务名和字段语义是否冲突。
+- `git diff --check`。
+
+文档治理任务不得修改业务代码、数据库 Schema 或 Kubernetes 清单。

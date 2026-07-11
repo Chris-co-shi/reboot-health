@@ -1,30 +1,44 @@
 # 实施规范索引
 
-本目录只保存**已经确认进入实施阶段**的工程交接规范，用于在 Codex、IDE Agent 或人工开发之间切换时保持同一目标、边界和验收口径。
+本目录只保存已经在 [`../PHASE_STATUS.md`](../PHASE_STATUS.md) 中标记为 `READY` 或 `IN_PROGRESS` 的文件级实施规范。
 
-实施规范不是完成状态来源：
+## 当前状态
 
-- 架构职责与稳定边界见 [`../architecture.md`](../architecture.md)。
-- 当前阶段、状态和验收结果见 [`../mvp-exec-plan.md`](../mvp-exec-plan.md)。
-- 长期有效的架构决策见 [`../decisions/`](../decisions/README.md)。
+```text
+Architecture：FROZEN
+Active implementation phase：NONE
+Active implementation spec：NONE
+```
 
-## 当前规范
+Phase 1–2C 的临时实施规范已从当前树删除。其完成证据已经汇总到 `PHASE_STATUS.md`，详细历史仍可通过 Git 记录追溯。
 
-| 阶段 | 状态 | 文档 | 目标 |
-|---|---|---|---|
-| Phase 2C | `READY` | [`phase-2c-interactive-session-cli.md`](phase-2c-interactive-session-cli.md) | 建立连续对话、显式 JSON Session 恢复和最小交互式 CLI |
+## 新规范准入条件
 
-## 已完成阶段参考
+任何新文件必须至少包含：
 
-| 阶段 | 状态 | 文档 | 用途 |
-|---|---|---|---|
-| Phase 2A | `DONE` | [`phase-2a-read-only-tool-call-loop.md`](phase-2a-read-only-tool-call-loop.md) | 保留真实 LLM → Tool Call → Tool Result → LLM 的实施与验收依据 |
+```text
+Phase / Slice
+Primary Module
+Goal
+Authoritative Documents
+Allowed Paths
+Forbidden Paths
+Contract Changes
+Migration / Compatibility
+Required Verification
+Definition of Done
+Out of Scope
+Completion Report Template
+```
 
-## 使用规则
+要求：
 
-1. 开发前先读取根目录 `AGENTS.md`、`health_agent/AGENTS.md` 和当前阶段实施规范。
-2. 实施规范中的禁止范围不得被 IDE Agent 自行扩大。
-3. 规范中标记为后续阶段的能力不得提前实现。
-4. 实际完成状态只能在 `mvp-exec-plan.md` 中更新。
-5. 已完成阶段规范不得被误读为当前待实施任务。
-6. 代码实现与规范冲突时必须停止并报告，不得通过放宽测试或删除校验解决。
+1. 对应 Phase/Slice 已经由用户批准并标记 `READY`。
+2. 先读取冻结文档和相关 ADR。
+3. 不允许在 implementation 规范中重新定义架构、状态机、安全规则或服务职责。
+4. 规范只指导一个可审查 Slice，不允许一次实现整个 Phase。
+5. 完成状态、测试结果、真实验收和风险必须写回 `PHASE_STATUS.md`。
+
+## 提示词规则
+
+ChatGPT 生成给 Codex、Trae、Hermes、Claude Code 或 IDE Agent 的提示词必须引用当前 implementation 规范。没有活动规范时，只能执行文档分析、技术 Spike 或用户明确批准的准备工作，不能修改业务代码。

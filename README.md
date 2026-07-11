@@ -2,100 +2,67 @@
 
 # reboot-health
 
-### Python-first health agent runtime
+### AI-first health platform and durable agent runtime
 
-<p>
-  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white">
-  <img alt="Scope" src="https://img.shields.io/badge/Scope-Private%20Single%20User-6C5CE7">
-  <img alt="Runtime" src="https://img.shields.io/badge/Runtime-OpenAI--compatible-111827">
-</p>
-
-**LLM 负责理解用户任务并决定下一步动作；Agent Runtime 负责模型回合、消息历史、工具调度和运行限制；确定性代码负责工具执行、安全边界、确认、持久化、幂等和审计。**
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![Architecture](https://img.shields.io/badge/Architecture-FROZEN-6C5CE7)
+![Phase](https://img.shields.io/badge/Phase-3A%20Frozen-00B894)
 
 </div>
 
-本项目不做医学诊断，也不替代医生意见。
+> 本项目不做医学诊断，不替代医生、急救服务或其他持证专业人士。
 
-## Current Status
-
-当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，并默认进入通用 `GenericAgentLoop`；`INITIAL_PLANNING` 只作为显式 legacy compatibility 入口保留。
+## Current status
 
 ```text
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
-Phase 2A 通用只读 Tool Call Agent Loop：DONE
-Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础：DONE_EXPLICIT
-Phase 2C Interactive Session & Conversation Context：DONE
-Phase 3A 健康领域只读工具：TODO
-Phase 3B 产品级 Safety Guard：TODO
+Phase 2A Tool Call Agent Loop：DONE
+Phase 2B Runtime state/recovery/JSON safety foundation：DONE_EXPLICIT
+Phase 2C Interactive Session：DONE
+Phase 3A Architecture Freeze：FROZEN
+
+Active implementation phase：NONE
 ```
 
-当前权威计划：
+2026-07-12 已完成架构冻结。未来代码、测试、部署和 Agent 提示词必须以 [`docs/`](docs/README.md) 为唯一事实来源。
 
-[`docs/mvp-exec-plan.md`](docs/mvp-exec-plan.md)
-
-当前 Phase 2C 实施规范：
-
-[`docs/implementation/phase-2c-interactive-session-cli.md`](docs/implementation/phase-2c-interactive-session-cli.md)
-
-## Current User Experience
-
-当前提供两类本地入口。
-
-`agent.main` 和 `scripts/agent_console.py` 仍是 **one-shot CLI**：
+## Frozen target architecture
 
 ```text
-一次用户输入
-→ GenericAgentLoop
-→ 模型直接回答或调用只读工具
-→ 最终答案
-→ 进程结束
+微信小程序 / Flutter / Vue Admin
+              ↓
+        Health Platform
+              ↓  mTLS + short-lived JWT
+          health-agent
+              ↓
+ Model Provider / Tool / Sandbox / RAG / Sub-Agent
 ```
 
-`scripts/agent_chat.py` 是 Phase 2C 新增的 **interactive Session CLI**：
+- **Health Platform**：用户身份、Conversation、Fact、Plan、Risk、File、Secret、审计和正式 API 的唯一权威。
+- **health-agent**：Task/Run/Step、模型、Tool、Checkpoint、RAG、Sub-Agent、Sandbox 和执行可观测性。
+- **PostgreSQL**：业务和执行权威持久化。
+- **Redis Streams**：调度和协调加速，不是事实源。
+- **MinIO**：第一版 ObjectStorageProvider。
+- **Kubernetes**：3 Control Plane + 3 Worker VM，全部组件运行在 K8s 内。
 
-```text
-启动交互式 CLI
-→ 用户连续输入
-→ 同一个 session_id 追加消息
-→ 可用显式 JSON Store 跨进程恢复
-```
+详细规则见 [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)。
 
-需要明确：
+## Current implemented runtime
 
-- 单次 Agent Run 内可以发生多次模型回合和 Tool Call。
-- one-shot 命令之间默认没有对话连续性。
-- interactive CLI 会在同一进程内复用同一组 Runtime Components。
-- 默认入口使用内存 Store，退出进程后 Session 消失。
-- JSON Store 必须显式指定目录；JSON 文件为本地明文，仅适合受控本地环境。
-- Session Message History 只是 Runtime 技术状态，不是长期 Memory 或已确认健康事实。
+当前真实可运行代码仍位于 [`health_agent/`](health_agent/README.md)，已经具备：
 
-## Current Runtime Shape
+- OpenAI-compatible Provider。
+- 通用有限轮次 Tool Call Loop。
+- ToolRegistry / ToolExecutor。
+- `convert_weight_unit`。
+- Session Message History。
+- JSON Store、CAS、lease、heartbeat、fencing。
+- execution checkpoint、stale recovery、orphan maintenance。
+- interactive Session CLI。
 
-```text
-用户输入
-→ 产品 Bootstrap
-→ GenericAgentLoop
-→ OpenAI-compatible ModelProvider.complete_turn(...)
-→ Assistant content 或原生 Tool Call
-→ 只读 ToolExecutor
-→ role=tool Result
-→ 下一次 Model Turn
-→ AgentRunResult
-```
+这些是未来独立 `health-agent` 服务的迁移基础，但当前本地 CLI/JSON Store **不是生产部署形态**。
 
-当前正式产品工具只有：
-
-```text
-convert_weight_unit：kg / lb / jin 确定性换算
-```
-
-显式启用 JSON Store 时，Runtime 可持久化 Session、PendingAction、RUNNING lease 和 execution checkpoint，并提供 stale recovery 与 orphan PendingAction 维护能力。
-
-底层 Confirmation/Recovery 协议不等同于产品 CLI/API 已提供批准、拒绝和恢复入口，也不代表正式写操作 Tool 已上线。
-
-## Python Quick Start
-
-### 1. 环境
+## Local runtime quick start
 
 ```bash
 cd health_agent
@@ -105,7 +72,7 @@ python -m pip install -e .
 cp .env.example .env
 ```
 
-编辑 `health_agent/.env`：
+配置：
 
 ```dotenv
 LLM_BASE_URL=https://api.example.com/v1
@@ -114,94 +81,55 @@ LLM_MODEL=your-model-name
 LLM_TIMEOUT_SECONDS=60
 ```
 
-shell 环境变量优先于 `.env`。缺少必要模型配置时，产品入口会明确失败，不会回退测试替身。
-
-### 2. 当前直接使用
+运行：
 
 ```bash
-cd health_agent
 python3 -m agent.main --user-text "190 斤是多少公斤？请调用工具计算。"
-python3 scripts/agent_console.py --user-text "用简单的话解释渐进超负荷。"
-```
-
-每个命令都是一次独立用户请求。
-
-交互式连续对话：
-
-```bash
-cd health_agent
 python3 scripts/agent_chat.py
 ```
 
-显式 JSON Session 恢复：
+验证：
 
 ```bash
-python3 scripts/agent_chat.py \
-  --storage json \
-  --storage-directory runtime-state \
-  --session-id chris-main
-```
-
-支持命令：`/help`、`/new`、`/status`、`/resume <session-id>`、`/exit`。
-`/resume` 只切换已存在 Session；Session 不存在时不会调用模型。
-
-### 3. 验证
-
-```bash
-cd health_agent
 python3 -m compileall agent tests scripts
 python3 -m unittest discover -s tests -v
 ```
 
-## Session、Context 与 Memory
+JSON Store 是本地明文，只适合受控开发环境。
 
-项目明确区分：
-
-```text
-Session Message History ≠ 长期 Memory
-Conversation Summary ≠ 已确认健康事实
-UserProfile / HealthConstraint / Plan ≠ 模型记忆
-Memory Candidate ≠ 自动生效的领域事实
-```
-
-详细决策：
-
-[`docs/decisions/0011-session-context-memory-boundaries.md`](docs/decisions/0011-session-context-memory-boundaries.md)
-
-## 尚未实现
-
-- 默认 one-shot 入口隐式持久化与恢复。
-- 真实用户档案、健康约束、计划和训练记录读取。
-- Console/API 的确认、拒绝和恢复入口。
-- 正式写操作 Tool 与计划发布。
-- FastAPI 产品 API。
-- 数据库、完整 Safety Guard 和正式 Memory Candidate 闭环。
-- Flutter/Web 正式客户端链路。
-
-仓库中保留的 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 属于 legacy。旧 Java/Python HTTP 链路和 Compose 启动链路当前不可用，不代表当前产品入口。
-
-## Documentation
+## Authoritative documents
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/product-scope.md`](docs/product-scope.md) | 产品定位、体验、范围与非目标 |
-| [`docs/architecture.md`](docs/architecture.md) | 当前 Python 模块化单体与 Agent Runtime 架构 |
-| [`docs/mvp-exec-plan.md`](docs/mvp-exec-plan.md) | 当前阶段、状态、范围和验收 |
-| [`docs/implementation/phase-2c-interactive-session-cli.md`](docs/implementation/phase-2c-interactive-session-cli.md) | 当前 Phase 2C 工程交接规范 |
-| [`docs/decisions/0010-python-modular-monolith-and-agent-loop.md`](docs/decisions/0010-python-modular-monolith-and-agent-loop.md) | Python-first 与通用 Agent Loop 决策 |
-| [`docs/decisions/0011-session-context-memory-boundaries.md`](docs/decisions/0011-session-context-memory-boundaries.md) | Session、Context、Memory 与领域事实边界 |
-| [`health_agent/README.md`](health_agent/README.md) | Python Runtime 入口和验证 |
-| [`AGENTS.md`](AGENTS.md) | 仓库级协作与边界规则 |
-| [`docs/`](docs/README.md) | 文档索引与阅读路径 |
+| [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) | 产品、客户端、Fact、Plan、风险和文件要求 |
+| [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) | 双服务、异步执行、事件、RAG 和 Sub-Agent |
+| [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md) | 领域模型和数据权威 |
+| [`docs/STATE_MACHINES.md`](docs/STATE_MACHINES.md) | 状态和合法转换 |
+| [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) | 客户端、Runtime、Tool 和事件合同 |
+| [`docs/SECURITY_AND_PRIVACY.md`](docs/SECURITY_AND_PRIVACY.md) | mTLS/JWT、Sandbox、Secret 和隐私 |
+| [`docs/DEPLOYMENT_AND_OPERATIONS.md`](docs/DEPLOYMENT_AND_OPERATIONS.md) | 六 VM K8s、灰度、备份和运维 |
+| [`docs/PHASE_STATUS.md`](docs/PHASE_STATUS.md) | 已完成证据和后续 Phase |
+| [`docs/decisions/`](docs/decisions/README.md) | ADR 与替代关系 |
 
-## Agent Instructions
+## Development governance
 
-| 范围 | 规则 |
-|---|---|
-| 全仓 | [`AGENTS.md`](AGENTS.md) |
-| Python Runtime | [`health_agent/AGENTS.md`](health_agent/AGENTS.md) |
-| 文档 | [`docs/AGENTS.md`](docs/AGENTS.md) |
-| Java legacy | [`backend/AGENTS.md`](backend/AGENTS.md) |
-| Flutter legacy | [`clients/flutter/AGENTS.md`](clients/flutter/AGENTS.md) |
-| Vue legacy | [`frontend/AGENTS.md`](frontend/AGENTS.md) |
-| Deployment legacy | [`deploy/AGENTS.md`](deploy/AGENTS.md) |
+开始任何代码任务前必须读取 [`AGENTS.md`](AGENTS.md)。
+
+规则摘要：
+
+```text
+讨论并形成决策
+→ 更新权威文档 / ADR
+→ 用户批准
+→ Phase/Slice 标记 READY
+→ 创建 implementation 规范
+→ Codex/人工实现
+→ 验证和真实验收
+→ 写回 PHASE_STATUS
+```
+
+没有 READY Slice 时禁止开始业务代码实现。
+
+## Legacy
+
+`backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 是 legacy/迁移参考，不是当前正式运行链路。关键 PlanVersion、revision、幂等和审计语义完成迁移并验收前，不凭判断直接删除 legacy 代码。
