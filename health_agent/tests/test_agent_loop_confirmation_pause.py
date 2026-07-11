@@ -317,8 +317,10 @@ class GenericAgentLoopConfirmationPauseTest(unittest.TestCase):
         self.assertEqual(result.error.code, ERROR_SESSION_VERSION_CONFLICT)
         self.assertEqual(calls["confirmation"], 0)
         self.assertIsNotNone(pending_store.get("action-1"))
-        self.assertEqual(session_store.get(result.session_id).status, AgentSessionStatus.ACTIVE)
-        self.assertIsNone(session_store.get(result.session_id).pending_action_id)
+        failed_session = session_store.get(result.session_id)
+        self.assertEqual(failed_session.status, AgentSessionStatus.FAILED)
+        self.assertIsNone(failed_session.active_run_id)
+        self.assertIsNone(failed_session.pending_action_id)
 
 
 class ConflictOnWaitingSaveSessionStore(InMemorySessionStore):

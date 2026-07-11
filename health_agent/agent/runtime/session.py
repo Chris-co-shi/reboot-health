@@ -24,6 +24,7 @@ class AgentSessionStatus(StrEnum):
     """跨多个用户输入的 Session 生命周期。"""
 
     ACTIVE = "active"
+    RUNNING = "running"
     WAITING_CONFIRMATION = "waiting_confirmation"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -44,6 +45,7 @@ class AgentSession:
     messages: list[ModelMessage] = field(default_factory=list)
     pending_action_id: str | None = None
     continuation: AgentContinuation | None = None
+    active_run_id: str | None = None
     version: int = 0
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -63,6 +65,9 @@ class AgentSession:
         if self.pending_action_id is not None:
             pending_action_id = str(self.pending_action_id or "").strip()
             self.pending_action_id = pending_action_id or None
+        if self.active_run_id is not None:
+            active_run_id = str(self.active_run_id or "").strip()
+            self.active_run_id = active_run_id or None
         if not isinstance(self.version, int) or self.version < 0:
             raise ValueError("version must be a non-negative integer")
         if not isinstance(self.turns, int) or self.turns < 0:
@@ -190,6 +195,7 @@ def copy_session(session: AgentSession) -> AgentSession:
         messages=_copy_messages(session.messages),
         pending_action_id=session.pending_action_id,
         continuation=session.continuation,
+        active_run_id=session.active_run_id,
         version=session.version,
         created_at=session.created_at,
         updated_at=session.updated_at,
@@ -227,8 +233,10 @@ def _copy_tool_call(tool_call: ModelToolCall) -> ModelToolCall:
 
 def _coerce_session_status(value: AgentSessionStatus | RunStatus | str) -> AgentSessionStatus:
     if isinstance(value, RunStatus):
-        if value in (RunStatus.PENDING, RunStatus.RUNNING):
+        if value == RunStatus.PENDING:
             return AgentSessionStatus.ACTIVE
+        if value == RunStatus.RUNNING:
+            return AgentSessionStatus.RUNNING
         if value == RunStatus.WAITING_CONFIRMATION:
             return AgentSessionStatus.WAITING_CONFIRMATION
         if value == RunStatus.COMPLETED:

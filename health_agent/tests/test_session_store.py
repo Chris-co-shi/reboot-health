@@ -22,7 +22,13 @@ class AgentSessionTest(unittest.TestCase):
         self.assertEqual(session.messages, [])
         self.assertIsNone(session.pending_action_id)
         self.assertIsNone(session.continuation)
+        self.assertIsNone(session.active_run_id)
         self.assertEqual(session.created_at.tzinfo, timezone.utc)
+
+    def test_session_normalizes_active_run_id(self) -> None:
+        session = AgentSession(session_id="session-1", active_run_id=" run-1 ")
+
+        self.assertEqual(session.active_run_id, "run-1")
 
     def test_session_saves_complete_message_order(self) -> None:
         messages = [

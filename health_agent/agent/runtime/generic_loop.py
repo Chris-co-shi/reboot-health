@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -48,6 +48,12 @@ ERROR_TIMEOUT_REACHED = "TIMEOUT_REACHED"
 ERROR_SESSION_WAITING_CONFIRMATION = "SESSION_WAITING_CONFIRMATION"
 ERROR_SESSION_STATE_CONFLICT = "SESSION_STATE_CONFLICT"
 ERROR_SESSION_VERSION_CONFLICT = "SESSION_VERSION_CONFLICT"
+ERROR_SESSION_NOT_FOUND = "SESSION_NOT_FOUND"
+ERROR_SESSION_NOT_RESUMABLE = "SESSION_NOT_RESUMABLE"
+ERROR_SESSION_STILL_WAITING_CONFIRMATION = "SESSION_STILL_WAITING_CONFIRMATION"
+ERROR_SESSION_ALREADY_RUNNING = "SESSION_ALREADY_RUNNING"
+ERROR_SESSION_CONTINUATION_INVALID = "SESSION_CONTINUATION_INVALID"
+ERROR_SESSION_MESSAGE_HISTORY_INVALID = "SESSION_MESSAGE_HISTORY_INVALID"
 ERROR_PENDING_ACTION_CREATE_FAILED = "PENDING_ACTION_CREATE_FAILED"
 TOOL_POLICY_DENIED = "tool_policy_denied"
 DEFAULT_CONFIRMATION_TTL_SECONDS = 15 * 60
@@ -98,6 +104,27 @@ class GenericLoopLimits:
             raise ValueError("timeout_seconds must be positive")
 
 
+@dataclass
+class _DriveState:
+    """一次 RUNNING 占用内的可变执行游标。
+
+    该结构只在 `GenericAgentLoop` 内部流转，避免把 Fresh Run 和 Resume 分裂成
+    两套状态机。模型回合、工具次数和 active deadline 都从这里延续。
+    """
+
+    session: AgentSession
+    model_turns: int
+    tool_calls: int
+    started: float
+    active_deadline: float
+    started_at: datetime
+    deadline_at: datetime
+    current_assistant_message_index: int | None = None
+    next_tool_call_index: int = 0
+    current_originating_run_id: str | None = None
+    finish_reason: str | None = None
+
+
 class GenericAgentLoop:
     """不经过 trigger 的通用模型回合循环。"""
 
@@ -136,7 +163,7 @@ class GenericAgentLoop:
     def run(self, request: AgentRequest) -> AgentRunResult:
         """执行一次有限模型回合循环。"""
         started = self.monotonic_provider()
-        deadline = started + self.limits.timeout_seconds
+        active_deadline = started + self.limits.timeout_seconds
         wall_clock_started = self._wall_clock_now()
         started_at = _require_aware_utc(wall_clock_started)
         deadline_at = started_at + timedelta(seconds=self.limits.timeout_seconds)
@@ -172,6 +199,17 @@ class GenericAgentLoop:
         if start_error is not None:
             return start_error
 
+        claimed_or_error = self._claim_session(
+            trace=trace,
+            session=session,
+            started=started,
+            model_turns=0,
+            tool_calls=0,
+        )
+        if isinstance(claimed_or_error, AgentRunResult):
+            return claimed_or_error
+        session = claimed_or_error
+
         runtime_environment = build_runtime_environment(
             now=wall_clock_started if self.now_provider else None,
             locale=request.locale,
@@ -192,6 +230,7 @@ class GenericAgentLoop:
                 messages=tuple(session.messages),
                 error_code=_session_error_code(exc),
                 message="Session could not be saved before model execution",
+                session=session,
             )
         self.trace_recorder.record_step(
             trace,
@@ -199,65 +238,245 @@ class GenericAgentLoop:
             {"topLevelKeys": ["runtimeEnvironment"]},
         )
 
-        model_turns = 0
-        tool_calls = 0
+        state = _DriveState(
+            session=session,
+            model_turns=0,
+            tool_calls=0,
+            started=started,
+            active_deadline=active_deadline,
+            started_at=started_at,
+            deadline_at=deadline_at,
+            current_originating_run_id=trace.run_id,
+        )
+        return self._drive_session(
+            trace=trace,
+            state=state,
+            provider_name=provider_name,
+            is_resume=False,
+        )
+
+    def resume(self, session_id: str) -> AgentRunResult:
+        """从已确认完成的 AgentContinuation 恢复执行。
+
+        Resume 只消费 Session 中已有的 assistant/tool 消息历史，不接受新的用户
+        输入、Tool arguments 或确认决策。Approve/Reject 已由
+        ConfirmationCoordinator 表达成 role=tool Result。
+        """
+
+        requested_session_id = str(session_id or "").strip()
+        started = self.monotonic_provider()
+        provider_name = str(getattr(self.provider, "provider_name", "unknown"))
+        trace = self.trace_recorder.start(
+            session_id=requested_session_id or "missing-session",
+            trigger_type=GENERIC_TRIGGER_TYPE,
+            provider=provider_name,
+        )
+        self.trace_recorder.record_step(
+            trace,
+            "resume_started",
+            {"provider": provider_name, "modelTurns": 0, "toolCallCount": 0},
+        )
+
+        session = self.session_store.get(requested_session_id)
+        if session is None:
+            return self._session_error_result(
+                trace=trace,
+                session_id=requested_session_id or "missing-session",
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=(),
+                error_code=ERROR_SESSION_NOT_FOUND,
+                message="Session was not found for resume",
+                release_session=False,
+            )
+
+        if session.status == AgentSessionStatus.RUNNING:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_ALREADY_RUNNING,
+                message="Session is already running",
+                release_session=False,
+            )
+        if session.status == AgentSessionStatus.WAITING_CONFIRMATION:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_STILL_WAITING_CONFIRMATION,
+                message="Session is still waiting for confirmation",
+                release_session=False,
+            )
+        if session.status != AgentSessionStatus.ACTIVE:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_NOT_RESUMABLE,
+                message="Session status is not resumable",
+                release_session=False,
+            )
+        if session.pending_action_id is not None:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_STILL_WAITING_CONFIRMATION,
+                message="Session still references a pending action",
+                release_session=False,
+            )
+
+        continuation_or_error = self._validate_resume_continuation(
+            trace=trace,
+            session=session,
+            started=started,
+        )
+        if isinstance(continuation_or_error, AgentRunResult):
+            return continuation_or_error
+        continuation = continuation_or_error
+
+        claimed_or_error = self._claim_session(
+            trace=trace,
+            session=session,
+            started=started,
+            model_turns=continuation.model_turns_used,
+            tool_calls=continuation.tool_calls_used,
+        )
+        if isinstance(claimed_or_error, AgentRunResult):
+            return claimed_or_error
+        session = claimed_or_error
+
+        state = _DriveState(
+            session=session,
+            model_turns=continuation.model_turns_used,
+            tool_calls=continuation.tool_calls_used,
+            started=started,
+            active_deadline=started + continuation.remaining_runtime_seconds,
+            started_at=continuation.started_at,
+            deadline_at=continuation.deadline_at,
+            current_assistant_message_index=continuation.assistant_message_index,
+            next_tool_call_index=continuation.next_tool_call_index,
+            current_originating_run_id=continuation.originating_run_id,
+        )
+        return self._drive_session(
+            trace=trace,
+            state=state,
+            provider_name=provider_name,
+            is_resume=True,
+        )
+
+    def _drive_session(
+        self,
+        *,
+        trace,
+        state: _DriveState,
+        provider_name: str,
+        is_resume: bool,
+    ) -> AgentRunResult:
+        """驱动 Session 从 RUNNING 到完成、再次暂停或失败。
+
+        Fresh Run 和 Resume 共享这个循环，确保预算、超时、权限和消息顺序只有一
+        套实现。`state.session` 必须已经被当前 `trace.run_id` 成功 claim。
+        """
+
         tool_definitions = self.tool_registry.to_model_definitions()
 
-        while model_turns < self.limits.max_model_turns:
-            if self._deadline_reached(deadline):
+        while True:
+            if state.current_assistant_message_index is not None:
+                resumed = self._process_tool_calls(
+                    trace=trace,
+                    state=state,
+                    is_resume=is_resume,
+                )
+                if isinstance(resumed, AgentRunResult):
+                    return resumed
+
+            if state.model_turns >= self.limits.max_model_turns:
                 return self._limit_reached(
                     trace=trace,
-                    session_id=session.session_id,
-                    started=started,
-                    model_turns=model_turns,
-                    tool_calls=tool_calls,
-                    messages=tuple(session.messages),
+                    session=state.session,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    messages=tuple(state.session.messages),
+                    error_code=ERROR_MAX_MODEL_TURNS_REACHED,
+                    message="Maximum model turns reached",
+                    limit_type="max_model_turns",
+                    finish_reason=state.finish_reason,
+                )
+
+            if self._deadline_reached(state.active_deadline):
+                return self._limit_reached(
+                    trace=trace,
+                    session=state.session,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    messages=tuple(state.session.messages),
                     error_code=ERROR_TIMEOUT_REACHED,
                     message="Agent run timed out before the next model turn",
                     limit_type="timeout",
+                    finish_reason=state.finish_reason,
                 )
 
-            model_turns += 1
+            state.model_turns += 1
             self.trace_recorder.record_step(
                 trace,
                 "model_turn_started",
                 {
-                    "modelTurns": model_turns,
-                    "toolCallCount": tool_calls,
+                    "modelTurns": state.model_turns,
+                    "toolCallCount": state.tool_calls,
                     "provider": provider_name,
                 },
             )
             try:
                 response = self.provider.complete_turn(
-                    messages=tuple(session.messages),
+                    messages=tuple(state.session.messages),
                     tools=tool_definitions,
                 )
             except ProviderResponseError as exc:
                 trace.warnings.append(exc.safe_summary)
-                session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+                state.session = self._best_effort_status(
+                    state.session,
+                    AgentSessionStatus.FAILED,
+                )
                 self.trace_recorder.finish(trace, GENERIC_STATUS_MODEL_ERROR)
                 self.trace_recorder.record_step(
                     trace,
                     "run_finished",
                     {
                         "finalStatus": GENERIC_STATUS_MODEL_ERROR,
-                        "modelTurns": model_turns,
-                        "toolCallCount": tool_calls,
+                        "modelTurns": state.model_turns,
+                        "toolCallCount": state.tool_calls,
                         "errorCode": ERROR_MODEL_ERROR,
-                        "elapsedMs": self._elapsed_ms(started),
+                        "elapsedMs": self._elapsed_ms(state.started),
                     },
                 )
                 return self._result(
                     trace=trace,
-                    session_id=session.session_id,
+                    session_id=state.session.session_id,
                     status=GENERIC_STATUS_MODEL_ERROR,
-                    model_turns=model_turns,
-                    tool_calls=tool_calls,
-                    messages=tuple(session.messages),
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    messages=tuple(state.session.messages),
                     error=AgentRunError(code=ERROR_MODEL_ERROR, message=exc.safe_summary),
                 )
 
-            assistant_message_index = len(session.messages)
+            assistant_message_index = len(state.session.messages)
             assistant_message = (
                 ModelMessage(
                     role="assistant",
@@ -266,265 +485,124 @@ class GenericAgentLoop:
                 )
             )
             try:
-                session = self._append_and_save(session, assistant_message)
+                state.session = self._append_and_save(state.session, assistant_message)
             except SessionStoreError as exc:
                 return self._session_error_result(
                     trace=trace,
-                    session_id=session.session_id,
-                    started=started,
-                    model_turns=model_turns,
-                    tool_calls=tool_calls,
+                    session_id=state.session.session_id,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
                     finish_reason=response.finish_reason,
-                    messages=tuple(session.messages),
+                    messages=tuple(state.session.messages),
                     error_code=_session_error_code(exc),
                     message="Session could not save assistant message",
+                    session=state.session,
                 )
+            state.finish_reason = response.finish_reason
             self.trace_recorder.record_step(
                 trace,
                 "model_turn_completed",
                 {
-                    "modelTurns": model_turns,
-                    "toolCallCount": tool_calls,
+                    "modelTurns": state.model_turns,
+                    "toolCallCount": state.tool_calls,
                     "finishReason": response.finish_reason,
                     "contentChars": len(response.content or ""),
                 },
             )
 
-            if self._deadline_reached(deadline):
+            if self._deadline_reached(state.active_deadline):
                 return self._limit_reached(
                     trace=trace,
-                    session_id=session.session_id,
-                    started=started,
-                    model_turns=model_turns,
-                    tool_calls=tool_calls,
+                    session=state.session,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
                     finish_reason=response.finish_reason,
-                    messages=tuple(session.messages),
+                    messages=tuple(state.session.messages),
                     error_code=ERROR_TIMEOUT_REACHED,
                     message="Agent run timed out after the model turn",
                     limit_type="timeout",
                 )
 
             if response.tool_calls:
-                batch_size = len(response.tool_calls)
-                if model_turns >= self.limits.max_model_turns:
+                if state.model_turns >= self.limits.max_model_turns:
                     return self._limit_reached(
                         trace=trace,
-                        session_id=session.session_id,
-                        started=started,
-                        model_turns=model_turns,
-                        tool_calls=tool_calls,
+                        session=state.session,
+                        started=state.started,
+                        model_turns=state.model_turns,
+                        tool_calls=state.tool_calls,
                         finish_reason=response.finish_reason,
-                        messages=tuple(session.messages),
+                        messages=tuple(state.session.messages),
                         error_code=ERROR_MAX_MODEL_TURNS_REACHED,
                         message="Maximum model turns reached before tool results could be returned",
                         limit_type="max_model_turns",
                     )
-                if tool_calls + batch_size > self.limits.max_tool_calls:
-                    return self._limit_reached(
-                        trace=trace,
-                        session_id=session.session_id,
-                        started=started,
-                        model_turns=model_turns,
-                        tool_calls=tool_calls,
-                        finish_reason=response.finish_reason,
-                        messages=tuple(session.messages),
-                        error_code=ERROR_MAX_TOOL_CALLS_REACHED,
-                        message="Maximum tool calls reached before executing the current batch",
-                        limit_type="max_tool_calls",
-                    )
-                if self._deadline_reached(deadline):
-                    return self._limit_reached(
-                        trace=trace,
-                        session_id=session.session_id,
-                        started=started,
-                        model_turns=model_turns,
-                        tool_calls=tool_calls,
-                        finish_reason=response.finish_reason,
-                        messages=tuple(session.messages),
-                        error_code=ERROR_TIMEOUT_REACHED,
-                        message="Agent run timed out before executing tools",
-                        limit_type="timeout",
-                    )
-
-                self.trace_recorder.record_step(
-                    trace,
-                    "tool_batch_started",
-                    {
-                        "modelTurns": model_turns,
-                        "toolCallCount": tool_calls,
-                    },
-                )
-                for tool_call_index, tool_call in enumerate(response.tool_calls):
-                    if self._deadline_reached(deadline):
-                        return self._limit_reached(
-                            trace=trace,
-                            session_id=session.session_id,
-                            started=started,
-                            model_turns=model_turns,
-                            tool_calls=tool_calls,
-                            finish_reason=response.finish_reason,
-                            messages=tuple(session.messages),
-                            error_code=ERROR_TIMEOUT_REACHED,
-                            message="Agent run timed out before executing a tool",
-                            limit_type="timeout",
-                        )
-
-                    self.trace_recorder.record_step(
-                        trace,
-                        "tool_call_started",
-                        {
-                            "modelTurns": model_turns,
-                            "toolCallCount": tool_calls,
-                            "toolName": tool_call.name,
-                        },
-                    )
-
-                    preflight = self.tool_executor.preflight(tool_call)
-                    if preflight.error_result is not None:
-                        result = preflight.error_result
-                    else:
-                        prepared_call = preflight.prepared_call
-                        if prepared_call is None:
-                            raise RuntimeError("Tool preflight returned no prepared call")
-                        decision = self.approval_policy.evaluate(prepared_call.definition)
-                        if decision.disposition == ToolDisposition.REQUIRE_CONFIRMATION:
-                            return self._pause_for_confirmation(
-                                trace=trace,
-                                session=session,
-                                prepared_call=prepared_call,
-                                assistant_message_index=assistant_message_index,
-                                tool_call_index=tool_call_index,
-                                model_turns=model_turns,
-                                tool_calls=tool_calls,
-                                started=started,
-                                started_at=started_at,
-                                deadline_at=deadline_at,
-                                remaining_runtime_seconds=max(
-                                    0.0,
-                                    deadline - self.monotonic_provider(),
-                                ),
-                            )
-                        if decision.disposition == ToolDisposition.EXECUTE_NOW:
-                            result = self.tool_executor.execute_prepared(prepared_call)
-                        else:
-                            result = _policy_denied_result(
-                                tool_call_id=prepared_call.tool_call_id,
-                                tool_name=prepared_call.tool_name,
-                                message=decision.message,
-                            )
-
-                    tool_calls += 1
-                    try:
-                        session = self._append_and_save(session, _tool_result_message(result))
-                    except SessionStoreError as exc:
-                        return self._session_error_result(
-                            trace=trace,
-                            session_id=session.session_id,
-                            started=started,
-                            model_turns=model_turns,
-                            tool_calls=tool_calls,
-                            finish_reason=response.finish_reason,
-                            messages=tuple(session.messages),
-                            error_code=_session_error_code(exc),
-                            message="Session could not save tool result",
-                        )
-
-                    self._record_tool_result(
-                        trace=trace,
-                        result=result,
-                        model_turns=model_turns,
-                        tool_calls=tool_calls,
-                    )
-
-                    if self._deadline_reached(deadline):
-                        return self._limit_reached(
-                            trace=trace,
-                            session_id=session.session_id,
-                            started=started,
-                            model_turns=model_turns,
-                            tool_calls=tool_calls,
-                            finish_reason=response.finish_reason,
-                            messages=tuple(session.messages),
-                            error_code=ERROR_TIMEOUT_REACHED,
-                            message="Agent run timed out after executing a tool",
-                            limit_type="timeout",
-                        )
-
-                self.trace_recorder.record_step(
-                    trace,
-                    "tool_batch_completed",
-                    {
-                        "modelTurns": model_turns,
-                        "toolCallCount": tool_calls,
-                    },
-                )
+                state.current_assistant_message_index = assistant_message_index
+                state.next_tool_call_index = 0
+                state.current_originating_run_id = trace.run_id
                 continue
 
             final_text = str(response.content or "").strip()
             if not final_text:
-                session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+                state.session = self._best_effort_status(
+                    state.session,
+                    AgentSessionStatus.FAILED,
+                )
                 self.trace_recorder.finish(trace, GENERIC_STATUS_INVALID_RESPONSE)
                 self.trace_recorder.record_step(
                     trace,
                     "run_finished",
                     {
                         "finalStatus": GENERIC_STATUS_INVALID_RESPONSE,
-                        "modelTurns": model_turns,
-                        "toolCallCount": tool_calls,
+                        "modelTurns": state.model_turns,
+                        "toolCallCount": state.tool_calls,
                         "errorCode": ERROR_INVALID_RESPONSE,
-                        "elapsedMs": self._elapsed_ms(started),
+                        "elapsedMs": self._elapsed_ms(state.started),
                     },
                 )
                 return self._result(
                     trace=trace,
-                    session_id=session.session_id,
+                    session_id=state.session.session_id,
                     status=GENERIC_STATUS_INVALID_RESPONSE,
-                    model_turns=model_turns,
-                    tool_calls=tool_calls,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
                     finish_reason=response.finish_reason,
-                    messages=tuple(session.messages),
+                    messages=tuple(state.session.messages),
                     error=AgentRunError(
                         code=ERROR_INVALID_RESPONSE,
                         message="Model response content is empty",
                     ),
                 )
 
-            session = self._best_effort_status(session, AgentSessionStatus.COMPLETED)
+            state.session = self._best_effort_status(
+                state.session,
+                AgentSessionStatus.COMPLETED,
+            )
             self.trace_recorder.finish(trace, GENERIC_STATUS_COMPLETED)
             self.trace_recorder.record_step(
                 trace,
                 "run_finished",
                 {
                     "finalStatus": GENERIC_STATUS_COMPLETED,
-                    "modelTurns": model_turns,
-                    "toolCallCount": tool_calls,
+                    "modelTurns": state.model_turns,
+                    "toolCallCount": state.tool_calls,
                     "finishReason": response.finish_reason,
-                    "elapsedMs": self._elapsed_ms(started),
+                    "elapsedMs": self._elapsed_ms(state.started),
                 },
             )
             return self._result(
                 trace=trace,
-                session_id=session.session_id,
+                session_id=state.session.session_id,
                 status=GENERIC_STATUS_COMPLETED,
-                model_turns=model_turns,
-                tool_calls=tool_calls,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
                 finish_reason=response.finish_reason,
-                messages=tuple(session.messages),
+                messages=tuple(state.session.messages),
                 final_text=final_text,
                 output={"finalText": final_text},
             )
-
-        return self._limit_reached(
-            trace=trace,
-            session_id=session.session_id,
-            started=started,
-            model_turns=model_turns,
-            tool_calls=tool_calls,
-            messages=tuple(session.messages),
-            error_code=ERROR_MAX_MODEL_TURNS_REACHED,
-            message="Maximum model turns reached",
-            limit_type="max_model_turns",
-        )
 
     def _start_session_turn(
         self,
@@ -538,7 +616,7 @@ class GenericAgentLoop:
         消息也必须在调用模型前进入 SessionStore，而不是只存在于局部变量。
         """
 
-        session.status = AgentSessionStatus.ACTIVE
+        session.status = AgentSessionStatus.RUNNING
         session.pending_action_id = None
         session.continuation = None
         session.locale = request.locale
@@ -573,6 +651,469 @@ class GenericAgentLoop:
 
         session.messages.append(message)
         return self.session_store.save(session, expected_version=session.version)
+
+    def _claim_session(
+        self,
+        *,
+        trace,
+        session: AgentSession,
+        started: float,
+        model_turns: int,
+        tool_calls: int,
+    ) -> AgentSession | AgentRunResult:
+        """把 ACTIVE/COMPLETED Session 原子切换为 RUNNING。
+
+        只有 CAS 成功后才允许调用模型或工具。CAS 失败时会重新读取当前 Session，
+        如果已被其它 run 占用，则返回稳定的 `SESSION_ALREADY_RUNNING`。
+        """
+
+        session.status = AgentSessionStatus.RUNNING
+        session.active_run_id = trace.run_id
+        try:
+            return self.session_store.save(session, expected_version=session.version)
+        except SessionVersionConflictError:
+            latest = self.session_store.get(session.session_id)
+            if latest is not None and latest.status == AgentSessionStatus.RUNNING:
+                return self._session_error_result(
+                    trace=trace,
+                    session_id=session.session_id,
+                    started=started,
+                    model_turns=model_turns,
+                    tool_calls=tool_calls,
+                    messages=tuple(latest.messages),
+                    error_code=ERROR_SESSION_ALREADY_RUNNING,
+                    message="Session is already running",
+                    release_session=False,
+                )
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_VERSION_CONFLICT,
+                message="Session could not be claimed because its version changed",
+                release_session=False,
+            )
+        except SessionStoreError as exc:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=_session_error_code(exc),
+                message="Session could not be claimed for execution",
+                release_session=False,
+            )
+
+    def _validate_resume_continuation(
+        self,
+        *,
+        trace,
+        session: AgentSession,
+        started: float,
+    ) -> AgentContinuation | AgentRunResult:
+        """校验 Resume 的 continuation 与消息历史是否一致。
+
+        已处理的 Tool Call 必须已有且仅有一条 role=tool Result；cursor 当前及
+        后续 Tool Call 不能已有结果。遇到矛盾直接 fail closed，不通过重新执行
+        handler 来修复历史。
+        """
+
+        continuation = session.continuation
+        if continuation is None:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_NOT_RESUMABLE,
+                message="Session has no continuation to resume",
+                release_session=False,
+            )
+        if not session.messages:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=continuation.model_turns_used,
+                tool_calls=continuation.tool_calls_used,
+                messages=(),
+                error_code=ERROR_SESSION_MESSAGE_HISTORY_INVALID,
+                message="Session message history is empty",
+                session=session,
+            )
+        assistant_or_error = self._assistant_message_for_continuation(
+            session=session,
+            continuation=continuation,
+            trace=trace,
+            started=started,
+        )
+        if isinstance(assistant_or_error, AgentRunResult):
+            return assistant_or_error
+        assistant_message = assistant_or_error
+        tool_calls = tuple(assistant_message.tool_calls or ())
+        if continuation.next_tool_call_index > len(tool_calls):
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=continuation.model_turns_used,
+                tool_calls=continuation.tool_calls_used,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_CONTINUATION_INVALID,
+                message="next_tool_call_index is out of range",
+                session=session,
+            )
+
+        tool_result_counts = _tool_result_counts(session.messages)
+        for tool_call_index, tool_call in enumerate(tool_calls):
+            result_count = tool_result_counts.get(tool_call.id, 0)
+            if result_count > 1:
+                return self._session_error_result(
+                    trace=trace,
+                    session_id=session.session_id,
+                    started=started,
+                    model_turns=continuation.model_turns_used,
+                    tool_calls=continuation.tool_calls_used,
+                    messages=tuple(session.messages),
+                    error_code=ERROR_SESSION_MESSAGE_HISTORY_INVALID,
+                    message="Tool result is duplicated in message history",
+                    session=session,
+                )
+            if tool_call_index < continuation.next_tool_call_index and result_count != 1:
+                return self._session_error_result(
+                    trace=trace,
+                    session_id=session.session_id,
+                    started=started,
+                    model_turns=continuation.model_turns_used,
+                    tool_calls=continuation.tool_calls_used,
+                    messages=tuple(session.messages),
+                    error_code=ERROR_SESSION_MESSAGE_HISTORY_INVALID,
+                    message="Processed tool call has no matching tool result",
+                    session=session,
+                )
+            if tool_call_index >= continuation.next_tool_call_index and result_count:
+                return self._session_error_result(
+                    trace=trace,
+                    session_id=session.session_id,
+                    started=started,
+                    model_turns=continuation.model_turns_used,
+                    tool_calls=continuation.tool_calls_used,
+                    messages=tuple(session.messages),
+                    error_code=ERROR_SESSION_MESSAGE_HISTORY_INVALID,
+                    message="Unprocessed tool call already has a tool result",
+                    session=session,
+                )
+        return continuation
+
+    def _assistant_message_for_continuation(
+        self,
+        *,
+        session: AgentSession,
+        continuation: AgentContinuation,
+        trace,
+        started: float,
+    ) -> ModelMessage | AgentRunResult:
+        """按 continuation 定位 assistant(tool_calls) 消息。"""
+
+        if continuation.assistant_message_index >= len(session.messages):
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=continuation.model_turns_used,
+                tool_calls=continuation.tool_calls_used,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_CONTINUATION_INVALID,
+                message="assistant_message_index is out of range",
+                session=session,
+            )
+        assistant_message = session.messages[continuation.assistant_message_index]
+        if assistant_message.role != "assistant":
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=continuation.model_turns_used,
+                tool_calls=continuation.tool_calls_used,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_CONTINUATION_INVALID,
+                message="continuation does not point to an assistant message",
+                session=session,
+            )
+        if not assistant_message.tool_calls:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=continuation.model_turns_used,
+                tool_calls=continuation.tool_calls_used,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_CONTINUATION_INVALID,
+                message="assistant message has no tool calls",
+                session=session,
+            )
+        return assistant_message
+
+    def _process_tool_calls(
+        self,
+        *,
+        trace,
+        state: _DriveState,
+        is_resume: bool,
+    ) -> AgentRunResult | None:
+        """顺序处理当前 assistant message 的剩余 Tool Calls。
+
+        该方法只会从 `state.next_tool_call_index` 开始，不会触碰已持久化的历史
+        tool result。遇到新的 confirmation-required 工具时立即暂停并释放占用。
+        """
+
+        assistant_message = state.session.messages[state.current_assistant_message_index]
+        tool_calls = tuple(assistant_message.tool_calls or ())
+        if state.next_tool_call_index > len(tool_calls):
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                messages=tuple(state.session.messages),
+                error_code=ERROR_SESSION_CONTINUATION_INVALID,
+                message="next_tool_call_index is out of range",
+                session=state.session,
+            )
+        remaining_count = len(tool_calls) - state.next_tool_call_index
+        if remaining_count == 0:
+            cleared = self._clear_completed_continuation(
+                trace=trace,
+                state=state,
+            )
+            if isinstance(cleared, AgentRunResult):
+                return cleared
+            state.current_assistant_message_index = None
+            state.next_tool_call_index = 0
+            state.current_originating_run_id = trace.run_id
+            return None
+        if state.tool_calls + remaining_count > self.limits.max_tool_calls:
+            return self._limit_reached(
+                trace=trace,
+                session=state.session,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                messages=tuple(state.session.messages),
+                error_code=ERROR_MAX_TOOL_CALLS_REACHED,
+                message="Maximum tool calls reached before executing the current batch",
+                limit_type="max_tool_calls",
+                finish_reason=state.finish_reason,
+            )
+        if self._deadline_reached(state.active_deadline):
+            return self._limit_reached(
+                trace=trace,
+                session=state.session,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                messages=tuple(state.session.messages),
+                error_code=ERROR_TIMEOUT_REACHED,
+                message="Agent run timed out before executing tools",
+                limit_type="timeout",
+                finish_reason=state.finish_reason,
+            )
+
+        self.trace_recorder.record_step(
+            trace,
+            "tool_batch_started",
+            {
+                "modelTurns": state.model_turns,
+                "toolCallCount": state.tool_calls,
+            },
+        )
+        for tool_call_index in range(state.next_tool_call_index, len(tool_calls)):
+            tool_call = tool_calls[tool_call_index]
+            if self._deadline_reached(state.active_deadline):
+                return self._limit_reached(
+                    trace=trace,
+                    session=state.session,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    finish_reason=state.finish_reason,
+                    messages=tuple(state.session.messages),
+                    error_code=ERROR_TIMEOUT_REACHED,
+                    message="Agent run timed out before executing a tool",
+                    limit_type="timeout",
+                )
+            if is_resume:
+                self.trace_recorder.record_step(
+                    trace,
+                    "tool_call_resumed",
+                    {
+                        "modelTurns": state.model_turns,
+                        "toolCallCount": state.tool_calls,
+                        "toolName": tool_call.name,
+                    },
+                )
+            self.trace_recorder.record_step(
+                trace,
+                "tool_call_started",
+                {
+                    "modelTurns": state.model_turns,
+                    "toolCallCount": state.tool_calls,
+                    "toolName": tool_call.name,
+                },
+            )
+
+            preflight = self.tool_executor.preflight(tool_call)
+            if preflight.error_result is not None:
+                result = preflight.error_result
+            else:
+                prepared_call = preflight.prepared_call
+                if prepared_call is None:
+                    raise RuntimeError("Tool preflight returned no prepared call")
+                decision = self.approval_policy.evaluate(prepared_call.definition)
+                if decision.disposition == ToolDisposition.REQUIRE_CONFIRMATION:
+                    return self._pause_for_confirmation(
+                        trace=trace,
+                        session=state.session,
+                        prepared_call=prepared_call,
+                        assistant_message_index=state.current_assistant_message_index,
+                        tool_call_index=tool_call_index,
+                        model_turns=state.model_turns,
+                        tool_calls=state.tool_calls,
+                        started=state.started,
+                        started_at=state.started_at,
+                        deadline_at=state.deadline_at,
+                        originating_run_id=state.current_originating_run_id or trace.run_id,
+                        remaining_runtime_seconds=max(
+                            0.0,
+                            state.active_deadline - self.monotonic_provider(),
+                        ),
+                    )
+                if decision.disposition == ToolDisposition.EXECUTE_NOW:
+                    result = self.tool_executor.execute_prepared(prepared_call)
+                else:
+                    result = _policy_denied_result(
+                        tool_call_id=prepared_call.tool_call_id,
+                        tool_name=prepared_call.tool_name,
+                        message=decision.message,
+                    )
+
+            state.tool_calls += 1
+            state.next_tool_call_index = tool_call_index + 1
+            try:
+                state.session = self._append_tool_result_and_save(state, result)
+            except SessionStoreError as exc:
+                return self._session_error_result(
+                    trace=trace,
+                    session_id=state.session.session_id,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    finish_reason=state.finish_reason,
+                    messages=tuple(state.session.messages),
+                    error_code=_session_error_code(exc),
+                    message="Session could not save tool result",
+                    session=state.session,
+                )
+
+            self._record_tool_result(
+                trace=trace,
+                result=result,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+            )
+
+            if self._deadline_reached(state.active_deadline):
+                return self._limit_reached(
+                    trace=trace,
+                    session=state.session,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    finish_reason=state.finish_reason,
+                    messages=tuple(state.session.messages),
+                    error_code=ERROR_TIMEOUT_REACHED,
+                    message="Agent run timed out after executing a tool",
+                    limit_type="timeout",
+                )
+
+        self.trace_recorder.record_step(
+            trace,
+            "tool_batch_completed",
+            {
+                "modelTurns": state.model_turns,
+                "toolCallCount": state.tool_calls,
+            },
+        )
+        cleared = self._clear_completed_continuation(trace=trace, state=state)
+        if isinstance(cleared, AgentRunResult):
+            return cleared
+        state.current_assistant_message_index = None
+        state.next_tool_call_index = 0
+        state.current_originating_run_id = trace.run_id
+        return None
+
+    def _clear_completed_continuation(
+        self,
+        *,
+        trace,
+        state: _DriveState,
+    ) -> AgentRunResult | None:
+        """当前 assistant 的 Tool Calls 全部消费后清除旧 continuation。
+
+        continuation 只描述暂停断点；一旦恢复批次完成，后续新 assistant 的工具调
+        用必须以新的 run_id 和 assistant index 重新建立断点。
+        """
+
+        if state.session.continuation is None:
+            return None
+        state.session.continuation = None
+        try:
+            state.session = self.session_store.save(
+                state.session,
+                expected_version=state.session.version,
+            )
+        except SessionStoreError as exc:
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=state.finish_reason,
+                messages=tuple(state.session.messages),
+                error_code=_session_error_code(exc),
+                message="Session could not clear completed continuation",
+                session=state.session,
+            )
+        return None
+
+    def _append_tool_result_and_save(
+        self,
+        state: _DriveState,
+        result: ToolExecutionResult,
+    ) -> AgentSession:
+        """追加 role=tool Result，并在 Resume 场景同步推进 continuation 游标。"""
+
+        state.session.messages.append(_tool_result_message(result))
+        if state.session.continuation is not None:
+            state.session.continuation = replace(
+                state.session.continuation,
+                next_tool_call_index=state.next_tool_call_index,
+                tool_calls_used=state.tool_calls,
+                remaining_runtime_seconds=max(
+                    0.0,
+                    state.active_deadline - self.monotonic_provider(),
+                ),
+            )
+        return self.session_store.save(state.session, expected_version=state.session.version)
 
     def _existing_waiting_confirmation_result(
         self,
@@ -644,10 +1185,19 @@ class GenericAgentLoop:
     ) -> AgentRunResult | None:
         """确认当前 Session 可以进入新的模型回合。"""
 
-        if session.status not in (
-            AgentSessionStatus.ACTIVE,
-            AgentSessionStatus.COMPLETED,
-        ):
+        if session.status == AgentSessionStatus.RUNNING:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_ALREADY_RUNNING,
+                message="Session is already running",
+                release_session=False,
+            )
+        if session.status not in (AgentSessionStatus.ACTIVE, AgentSessionStatus.COMPLETED):
             return self._session_error_result(
                 trace=trace,
                 session_id=session.session_id,
@@ -683,6 +1233,7 @@ class GenericAgentLoop:
         started: float,
         started_at: datetime,
         deadline_at: datetime,
+        originating_run_id: str,
         remaining_runtime_seconds: float,
     ) -> AgentRunResult:
         """创建 PendingAction 并把 Session 切换到 WAITING_CONFIRMATION。
@@ -696,7 +1247,7 @@ class GenericAgentLoop:
         action = PendingAction(
             action_id=self.action_id_factory(),
             session_id=session.session_id,
-            originating_run_id=trace.run_id,
+            originating_run_id=originating_run_id,
             tool_call_id=prepared_call.tool_call_id,
             tool_name=prepared_call.tool_name,
             arguments=prepared_call.arguments,
@@ -719,12 +1270,14 @@ class GenericAgentLoop:
                 messages=tuple(session.messages),
                 error_code=ERROR_PENDING_ACTION_CREATE_FAILED,
                 message="Pending action could not be created",
+                session=session,
             )
 
         session.status = AgentSessionStatus.WAITING_CONFIRMATION
+        session.active_run_id = None
         session.pending_action_id = action.action_id
         session.continuation = AgentContinuation(
-            originating_run_id=trace.run_id,
+            originating_run_id=originating_run_id,
             assistant_message_index=assistant_message_index,
             next_tool_call_index=tool_call_index,
             model_turns_used=model_turns,
@@ -745,6 +1298,7 @@ class GenericAgentLoop:
                 messages=tuple(session.messages),
                 error_code=_session_error_code(exc),
                 message="Session could not be saved for confirmation pause",
+                session=session,
             )
 
         self.trace_recorder.record_step(
@@ -818,9 +1372,14 @@ class GenericAgentLoop:
         error_code: str,
         message: str,
         finish_reason: str | None = None,
+        session: AgentSession | None = None,
+        release_session: bool = True,
     ) -> AgentRunResult:
         """构造会话一致性错误结果，统一 fail closed。"""
 
+        if release_session and session is not None:
+            session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+            messages = tuple(session.messages)
         self.trace_recorder.finish(trace, GENERIC_STATUS_FAILED)
         self.trace_recorder.record_step(
             trace,
@@ -852,6 +1411,7 @@ class GenericAgentLoop:
         """尽力保存终态；失败时不覆盖原始运行结果。"""
 
         session.status = status
+        session.active_run_id = None
         if status != AgentSessionStatus.WAITING_CONFIRMATION:
             session.pending_action_id = None
             session.continuation = None
@@ -905,7 +1465,7 @@ class GenericAgentLoop:
     def _limit_reached(
         self,
         trace,
-        session_id: str,
+        session: AgentSession,
         started: float,
         model_turns: int,
         tool_calls: int,
@@ -915,6 +1475,8 @@ class GenericAgentLoop:
         limit_type: str,
         finish_reason: str | None = None,
     ) -> AgentRunResult:
+        session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+        messages = tuple(session.messages)
         self.trace_recorder.finish(trace, GENERIC_STATUS_LIMIT_REACHED)
         self.trace_recorder.record_step(
             trace,
@@ -940,7 +1502,7 @@ class GenericAgentLoop:
         )
         return self._result(
             trace=trace,
-            session_id=session_id,
+            session_id=session.session_id,
             status=GENERIC_STATUS_LIMIT_REACHED,
             model_turns=model_turns,
             tool_calls=tool_calls,
@@ -1013,6 +1575,16 @@ def _tool_result_message(result: ToolExecutionResult) -> ModelMessage:
         name=result.tool_name,
         tool_call_id=result.tool_call_id,
     )
+
+
+def _tool_result_counts(messages: list[ModelMessage] | tuple[ModelMessage, ...]) -> dict[str, int]:
+    """统计每个 tool_call_id 已持久化的 role=tool Result 数量。"""
+
+    counts: dict[str, int] = {}
+    for message in messages:
+        if message.role == "tool" and message.tool_call_id:
+            counts[message.tool_call_id] = counts.get(message.tool_call_id, 0) + 1
+    return counts
 
 
 def _policy_denied_result(
