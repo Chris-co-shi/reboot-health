@@ -12,12 +12,19 @@
 
 | 阶段 | 状态 | 文档 | 目标 |
 |---|---|---|---|
-| Phase 2A | `READY` | [`phase-2a-read-only-tool-call-loop.md`](phase-2a-read-only-tool-call-loop.md) | 建立真实 LLM → 只读 Tool Call → Tool Result → 真实 LLM 的有限轮次 Agent Loop |
+| Phase 2C | `READY` | [`phase-2c-interactive-session-cli.md`](phase-2c-interactive-session-cli.md) | 建立连续对话、显式 JSON Session 恢复和最小交互式 CLI |
+
+## 已完成阶段参考
+
+| 阶段 | 状态 | 文档 | 用途 |
+|---|---|---|---|
+| Phase 2A | `DONE` | [`phase-2a-read-only-tool-call-loop.md`](phase-2a-read-only-tool-call-loop.md) | 保留真实 LLM → Tool Call → Tool Result → LLM 的实施与验收依据 |
 
 ## 使用规则
 
-1. 开发前先读取根目录 `AGENTS.md`、`health_agent/AGENTS.md` 和对应实施规范。
+1. 开发前先读取根目录 `AGENTS.md`、`health_agent/AGENTS.md` 和当前阶段实施规范。
 2. 实施规范中的禁止范围不得被 IDE Agent 自行扩大。
 3. 规范中标记为后续阶段的能力不得提前实现。
 4. 实际完成状态只能在 `mvp-exec-plan.md` 中更新。
-5. 代码实现与规范冲突时必须停止并报告，不得通过放宽测试或删除校验解决。
+5. 已完成阶段规范不得被误读为当前待实施任务。
+6. 代码实现与规范冲突时必须停止并报告，不得通过放宽测试或删除校验解决。
