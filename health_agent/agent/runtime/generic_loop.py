@@ -399,6 +399,10 @@ class GenericAgentLoop:
                                 started=started,
                                 started_at=started_at,
                                 deadline_at=deadline_at,
+                                remaining_runtime_seconds=max(
+                                    0.0,
+                                    deadline - self.monotonic_provider(),
+                                ),
                             )
                         if decision.disposition == ToolDisposition.EXECUTE_NOW:
                             result = self.tool_executor.execute_prepared(prepared_call)
@@ -679,6 +683,7 @@ class GenericAgentLoop:
         started: float,
         started_at: datetime,
         deadline_at: datetime,
+        remaining_runtime_seconds: float,
     ) -> AgentRunResult:
         """创建 PendingAction 并把 Session 切换到 WAITING_CONFIRMATION。
 
@@ -726,6 +731,7 @@ class GenericAgentLoop:
             tool_calls_used=tool_calls,
             started_at=started_at,
             deadline_at=deadline_at,
+            remaining_runtime_seconds=remaining_runtime_seconds,
         )
         try:
             session = self.session_store.save(session, expected_version=session.version)

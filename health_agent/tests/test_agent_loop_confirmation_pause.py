@@ -61,6 +61,7 @@ class GenericAgentLoopConfirmationPauseTest(unittest.TestCase):
             pending_store=pending_store,
             action_ids=["action-1"],
             limits=GenericLoopLimits(timeout_seconds=42),
+            monotonic_provider=ControlledClock([100, 100, 100, 100, 100, 107, 107]),
         )
 
         self.assertEqual(result.status, GENERIC_STATUS_WAITING_CONFIRMATION)
@@ -91,6 +92,7 @@ class GenericAgentLoopConfirmationPauseTest(unittest.TestCase):
             loaded_session.continuation.deadline_at,
             datetime(2026, 1, 1, 19, 4, 47, tzinfo=timezone.utc),
         )
+        self.assertEqual(loaded_session.continuation.remaining_runtime_seconds, 35)
 
         loaded_action = pending_store.get("action-1")
         self.assertEqual(loaded_action.session_id, result.session_id)
@@ -332,6 +334,19 @@ class ConflictOnWaitingSaveSessionStore(InMemorySessionStore):
         return super().save(session, expected_version)
 
 
+class ControlledClock:
+    """按顺序返回 monotonic 时间，便于断言暂停时剩余 active runtime。"""
+
+    def __init__(self, values: list[float]) -> None:
+        self._values = list(values)
+        self._last = values[-1] if values else 0.0
+
+    def __call__(self) -> float:
+        if self._values:
+            self._last = self._values.pop(0)
+        return self._last
+
+
 CONFIRMATION_TOOL_NAME = "record_weight_measurement"
 READ_ONLY_TOOL_NAME = "lookup_profile_metric"
 
@@ -344,6 +359,7 @@ def _run(
     pending_store: InMemoryPendingActionStore | None = None,
     action_ids: list[str] | None = None,
     limits: GenericLoopLimits | None = None,
+    monotonic_provider=None,
     user_text: str = "记录体重",
 ) -> Any:
     """用固定时间和固定 action id 执行 GenericAgentLoop。"""
@@ -361,6 +377,7 @@ def _run(
         now_provider=_fixed_now,
         tool_registry=registry,
         action_id_factory=next_action_id,
+        monotonic_provider=monotonic_provider,
     )
     return loop.run(AgentRequest(user_text=user_text, session_id="session-1", locale="zh-CN"))
 

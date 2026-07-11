@@ -21,6 +21,26 @@ class AgentContinuationTest(unittest.TestCase):
         self.assertEqual(continuation.assistant_message_index, 2)
         self.assertEqual(continuation.next_tool_call_index, 1)
         self.assertEqual(continuation.started_at.tzinfo, timezone.utc)
+        self.assertEqual(continuation.remaining_runtime_seconds, 60)
+
+    def test_explicit_remaining_runtime_seconds_is_preserved(self) -> None:
+        started_at = _fixed_time()
+        continuation = AgentContinuation(
+            **{
+                **_valid_kwargs(started_at),
+                "remaining_runtime_seconds": 12.5,
+            }
+        )
+
+        self.assertEqual(continuation.remaining_runtime_seconds, 12.5)
+
+    def test_negative_remaining_runtime_seconds_is_rejected(self) -> None:
+        started_at = _fixed_time()
+        kwargs = _valid_kwargs(started_at)
+        kwargs["remaining_runtime_seconds"] = -0.1
+
+        with self.assertRaises(ValueError):
+            AgentContinuation(**kwargs)
 
     def test_negative_message_or_tool_index_is_rejected(self) -> None:
         started_at = _fixed_time()

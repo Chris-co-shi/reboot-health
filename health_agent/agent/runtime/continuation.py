@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -38,8 +39,11 @@ class AgentContinuation:
     # 原始运行开始的时间戳（UTC），用于计算剩余时间
     started_at: datetime
 
-    # 原始运行的截止时间戳（UTC），用于确保恢复后的执行仍在有效期内
+    # 原始运行的截止时间戳（UTC），只保留为诊断信息；人工确认等待不消耗此预算
     deadline_at: datetime
+
+    # 暂停瞬间剩余的 active runtime 秒数；Slice 4B 恢复时会以恢复时间重新计算截止点
+    remaining_runtime_seconds: float | None = None
 
     def __post_init__(self) -> None:
         """数据验证和标准化处理。
@@ -75,9 +79,20 @@ class AgentContinuation:
         if deadline_at < started_at:
             raise ValueError("deadline_at must not be earlier than started_at")
 
+        remaining_runtime_seconds = _coerce_remaining_runtime_seconds(
+            self.remaining_runtime_seconds,
+            started_at=started_at,
+            deadline_at=deadline_at,
+        )
+
         # 由于是 frozen dataclass，使用 object.__setattr__ 更新字段值
         object.__setattr__(self, "started_at", started_at)
         object.__setattr__(self, "deadline_at", deadline_at)
+        object.__setattr__(
+            self,
+            "remaining_runtime_seconds",
+            remaining_runtime_seconds,
+        )
 
 
 def _require_aware_utc(value: datetime, field_name: str) -> datetime:
@@ -103,3 +118,26 @@ def _require_aware_utc(value: datetime, field_name: str) -> datetime:
 
     # 统一转换为 UTC 时区，确保时间比较和计算的一致性
     return value.astimezone(UTC)
+
+
+def _coerce_remaining_runtime_seconds(
+    value: Any,
+    *,
+    started_at: datetime,
+    deadline_at: datetime,
+) -> float:
+    """校验剩余 active runtime 秒数。
+
+    旧 continuation 没有该字段时，按原始 started/deadline 推导，保持历史数据可读。
+    新暂停点会显式写入暂停瞬间剩余秒数；用户确认等待期间不会继续递减这个值。
+    """
+
+    if value is None:
+        return max(0.0, (deadline_at - started_at).total_seconds())
+    try:
+        remaining = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("remaining_runtime_seconds must be non-negative") from exc
+    if remaining < 0:
+        raise ValueError("remaining_runtime_seconds must be non-negative")
+    return remaining
