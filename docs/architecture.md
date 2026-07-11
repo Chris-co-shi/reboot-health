@@ -14,17 +14,46 @@ health_agent/
 
 ```text
 LLM 负责理解用户任务并决定下一步动作；
-Agent Runtime 负责模型回合、上下文、工具调度、运行限制和错误收敛；
+Agent Runtime 负责模型回合、消息历史、工具调度、运行限制和暂停恢复协议；
 确定性代码负责工具执行、数据校验、安全阻断、确认、持久化、幂等和审计。
 ```
 
 项目不采用固定 Planner → Executor → Reviewer → Publisher 流水线，也不默认采用多 Agent、DAG、工作流引擎、消息队列或微服务。
 
-历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 仍保留在仓库中，但属于 legacy，不是当前产品调用链，也不得在没有独立迁移任务时继续扩展。
+历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 属于 legacy，不是当前产品调用链。
 
-长期决策见 [`decisions/0010-python-modular-monolith-and-agent-loop.md`](decisions/0010-python-modular-monolith-and-agent-loop.md)。
+长期决策：
 
-## 2. 总体结构
+- [`decisions/0010-python-modular-monolith-and-agent-loop.md`](decisions/0010-python-modular-monolith-and-agent-loop.md)
+- [`decisions/0011-session-context-memory-boundaries.md`](decisions/0011-session-context-memory-boundaries.md)
+
+## 2. 当前实现状态
+
+```text
+DONE：
+- OpenAI-compatible Provider
+- GenericAgentLoop
+- 只读 ToolRegistry / ToolExecutor
+- convert_weight_unit
+- 单次 Run 内模型与工具多回合
+
+DONE_EXPLICIT：
+- JSON Session / PendingAction Store
+- ConfirmationCoordinator
+- lease / heartbeat / fencing
+- execution checkpoint
+- stale recovery
+- orphan PendingAction maintenance
+
+NEXT：
+- Interactive Session CLI
+- 产品入口显式接入 JSON Store
+- 连续对话与跨进程 Session 恢复
+```
+
+当前默认 `agent.main` 和 `scripts/agent_console.py` 是 one-shot 入口：每次进程只接受一次用户输入，进程之间不共享消息历史。
+
+## 3. 总体结构
 
 ```text
 CLI / future API
@@ -33,9 +62,11 @@ Composition Root / Bootstrap
       ↓
 Agent Runtime
 ├── Runtime Environment
-├── Message History
+├── Session Message History
 ├── Model Turn
 ├── Tool Call Loop
+├── Confirmation / Resume Protocol
+├── Lease / Fence / Checkpoint
 ├── Limits / Timeout
 ├── Error Convergence
 └── Trace / Events
@@ -45,23 +76,23 @@ ModelProvider              Tool Runtime
 ├── Message Conversion     ├── ToolExecutor
 ├── Tool Schema            └── Tool Handlers
 └── Response Parsing              ↓
-                              Domain Services
-                                   ↓
-                              Repository Ports
-                                   ↓
-                          Persistence Adapters（后续）
+                              Domain Query/Command Services
+                                      ↓
+                                Repository Ports
+                                      ↓
+                              Persistence Adapters
 ```
 
-当前 Phase 2A 只建设到只读 Tool Runtime，不接数据库、写操作、安全规则引擎或确认恢复。
+当前代码已建设 Runtime 与本地 JSON Adapter；健康领域 Repository、Domain Service 和正式数据库仍属于后续阶段。
 
-## 3. 依赖方向
+## 4. 依赖方向
 
 ```text
 interfaces
     ↓
 runtime
     ↓
-model/tool/session/safety ports
+model / tool / session / safety ports
     ↓
 tool implementations / domain services
     ↓
@@ -74,23 +105,26 @@ persistence adapters
 
 - Runtime 不包含健康业务术语、医疗阈值或训练规则。
 - Provider 不依赖 Planning、Program、Phase、WeeklyPlan 或 TodayAction。
-- Tool 可以调用 Domain Service，但 Agent Loop 不直接调用数据库。
-- Persistence Adapter 只能依赖 Repository Port，不反向控制 Runtime。
-- 外部入口只通过 Bootstrap 获取已组装对象，不在入口内重复组装 Provider 或 Tool。
+- Tool 可以调用 Domain Service，但 Agent Loop 不直接访问数据库。
+- Persistence Adapter 实现 Repository Port，不反向控制 Runtime。
+- 外部入口只能通过 Bootstrap 获取已组装对象。
+- Session Store 与健康领域 Repository 是两类不同持久化职责。
 
-## 4. Composition Root
+## 5. Composition Root
 
 `health_agent/agent/bootstrap.py` 是唯一产品组装入口。
 
-职责：
+当前职责：
 
 ```text
 加载并校验 LLMSettings
 → 创建 OpenAICompatibleProvider
 → 创建 ToolRegistry
-→ 注册产品工具
+→ 注册正式只读工具
 → 创建 ToolExecutor
-→ 创建 AgentLoop / AgentCore
+→ 创建 Session/PendingAction Store
+→ 创建 GenericAgentLoop
+→ 创建 ConfirmationCoordinator
 ```
 
 约束：
@@ -98,13 +132,11 @@ persistence adapters
 - `.env` 只由 Bootstrap 或其直接调用的配置加载函数读取。
 - shell 环境变量优先于 `health_agent/.env`。
 - 产品 Bootstrap 不导入 `tests/`、MockProvider 或 ScriptedModelProvider。
-- Provider、Runtime、Skill 和 Tool 不自行创建 Provider。
+- JSON Store 必须显式配置目录，不得无意改变默认产品行为。
 
-## 5. Agent Runtime
+## 6. Agent Runtime
 
-### 5.1 通用请求
-
-通用 Runtime 接受自然语言请求和通用调用元数据，不要求 trigger 映射到固定业务 Skill。
+### 6.1 通用请求
 
 ```text
 AgentRequest
@@ -114,11 +146,13 @@ AgentRequest
 └── metadata
 ```
 
-本阶段 Session 只存在于进程内，不持久化、不恢复长期对话。
+`session_id` 是用户消息连续性的关联键。相同 `session_id` 可以在同一 Store 中追加新的用户消息。
 
-### 5.2 Runtime Environment
+当前 one-shot CLI 每次进程重新创建内存 Store，因此即使 Runtime 支持 `session_id`，不同命令之间仍没有会话连续性。
 
-日期与时区只允许一个真相源：
+### 6.2 Runtime Environment
+
+日期与时区只有一个真相源：
 
 ```text
 runtimeEnvironment.currentDate
@@ -127,11 +161,9 @@ runtimeEnvironment.timezone
 runtimeEnvironment.locale
 ```
 
-通用 Context 不再独立暴露 `today`。旧兼容层如需要该字段，只能从 `runtimeEnvironment.currentDate` 派生。
+通用 Context 不独立暴露 `today`。legacy 兼容层只能从 `runtimeEnvironment.currentDate` 派生。
 
-### 5.3 有限轮次 Agent Loop
-
-目标运行链路：
+### 6.3 有限轮次 Agent Loop
 
 ```text
 User Message
@@ -145,59 +177,99 @@ User Message
 
 约束：
 
-- 无 Tool Call 时立即结束。
-- 同一 assistant 回合可返回多个 Tool Call，本阶段顺序执行。
-- 所有 Tool Result 追加后再进入下一次 Model Turn。
-- 不自动重试 Provider。
-- 不自动重试失败 Tool。
-- 不允许无限循环。
+- 无 Tool Call 时立即结束当前 Run。
+- 同一 assistant 回合可返回多个 Tool Call，当前按顺序执行。
+- 所有 Tool Result 必须以 `role=tool` 返回模型。
+- Provider 和 Tool 不自动无限重试。
 - 空 content 且无 Tool Call 属于无效响应。
+- 达到轮次、工具次数或超时限制时 fail-closed。
 
-Phase 2A 的详细算法、测试矩阵和文件级实施顺序见 [`implementation/phase-2a-read-only-tool-call-loop.md`](implementation/phase-2a-read-only-tool-call-loop.md)。
+### 6.4 Session 生命周期
 
-## 6. Model Provider
+AgentSession 保存：
+
+- 消息历史。
+- 当前状态。
+- PendingAction 指针。
+- continuation。
+- active run ownership。
+- lease、heartbeat 和 fence generation。
+- execution checkpoint。
+
+Session 状态属于 Runtime 技术状态，不等同于 UserProfile、Plan、TrainingRecord 等健康领域事实。
+
+### 6.5 Confirmation 与 Recovery
+
+Confirmation 是 Runtime 暂停恢复协议，不是普通模型 Tool：
+
+```text
+RUNNING
+→ WAITING_CONFIRMATION
+→ APPROVED / REJECTED
+→ ACTIVE
+→ resume
+```
+
+当前底层协议已经实现，但默认 CLI/API 尚未提供批准、拒绝和恢复命令，也没有正式写操作 Tool。
+
+stale recovery 采用保守策略：
+
+- `DRIVE_READY`：可安全接管并继续。
+- `MODEL_CALL_IN_FLIGHT`：状态未知，不自动重放。
+- `TOOL_CALL_IN_FLIGHT`：状态未知，不自动重放。
+- `FINALIZING`：终态未知，不自动覆盖。
+
+## 7. Session、Context、Memory 与领域事实
+
+必须严格区分：
+
+| 概念 | 作用 | 是否为健康事实 |
+|---|---|---:|
+| Session Message History | 保存用户与模型当前会话消息 | 否 |
+| Runtime Environment | 当前日期、时区、locale 等运行信息 | 否 |
+| Conversation Summary | 为控制上下文长度生成的对话摘要 | 否 |
+| UserProfile / HealthConstraint / Goal / Plan | 经确认的结构化业务事实 | 是 |
+| Memory Candidate | 模型推断的行为模式或策略经验候选 | 否，确认前不得生效 |
+
+规则：
+
+- Conversation Summary 不能自动写成 UserProfile 或 HealthConstraint。
+- 用户健康事实必须通过领域模型、Repository 和确认边界管理。
+- 普通澄清问题不创建 PendingAction。
+- 模型不得把单次推断自动变成长期 Memory。
+
+## 8. Phase 2C 目标架构
+
+```text
+scripts/agent_chat.py
+→ create_generic_runtime_components_from_env(...)
+→ 固定当前 session_id
+→ 循环读取用户输入
+→ components.loop.run(AgentRequest(...))
+→ 输出最终回答
+→ /new /resume /status /exit
+```
+
+内存模式用于单次进程体验；JSON 模式用于退出后恢复。
+
+Phase 2C 只解决 Conversation Continuity，不引入健康领域数据、数据库、Safety Guard 或写操作 Tool。
+
+## 9. Model Provider
 
 当前只支持 OpenAI-compatible Chat Completions。
 
-Provider 职责：
+Provider 负责：
 
 - 转换 system/user/assistant/tool 消息。
 - 转换模型可见 Tool Schema。
 - 解析 assistant content 与 Tool Call。
-- 保留 Tool Call id、name、raw arguments 和解析后 arguments。
-- 返回 usage、finish reason 和必要 provider metadata。
-- 归一化配置、网络、鉴权、限流、超时和响应协议错误。
+- 保留 Tool Call id、name 和 arguments。
+- 返回 usage、finish reason 和必要 metadata。
+- 归一化配置、网络、鉴权、限流、超时和协议错误。
 
-Provider 不负责：
+Provider 不负责 Tool 执行、Skill 选择、数据库访问、`.env` 加载或自动重试。
 
-- Tool 执行。
-- PlanningOutput 解析。
-- Skill 选择。
-- `.env` 加载。
-- 数据库访问。
-- 自动重试和 Mock 回退。
-
-## 7. Message Contract
-
-ModelMessage 支持：
-
-```text
-system
-user
-assistant
-tool
-```
-
-关键不变量：
-
-- assistant 消息可携带 `tool_calls`。
-- tool 消息必须携带对应 `tool_call_id`。
-- Tool Result 必须作为 role=tool 消息，不得伪装成 user 消息。
-- 同一 assistant 回合多个 Tool Call 的结果顺序与请求顺序一致。
-
-## 8. Tool Runtime
-
-### 8.1 Tool Contract
+## 10. Tool Runtime
 
 每个产品 Tool 至少声明：
 
@@ -212,113 +284,57 @@ timeout_seconds
 handler
 ```
 
-模型只能看到 name、description 和 input schema，不得看到 handler、内部 Python 路径或密钥。
+ToolRegistry 负责白名单和模型可见定义；ToolExecutor 负责查找、校验、执行和结构化结果。
 
-### 8.2 ToolRegistry
+当前正式产品 Tool 仍只允许只读查询或纯计算，不允许未经独立阶段批准新增写操作、任意 SQL、任意文件系统或 shell Tool。
 
-职责：
+## 11. 健康领域 Read Model
 
-- 白名单注册。
-- 工具名称唯一性校验。
-- 按名称查找。
-- 输出模型可见 Tool Definition。
-
-Registry 不执行工具，也不进行健康业务判断。
-
-### 8.3 ToolExecutor
-
-职责：
-
-- 校验工具存在。
-- 校验权限和副作用等级。
-- 校验 arguments。
-- 调用 handler。
-- 标准化为合法 JSON Tool Result。
-- 隐藏 traceback 和内部实现细节。
-
-### 8.4 Phase 2A 权限边界
-
-Phase 2A 只允许只读查询或纯计算 Tool。
-
-以下能力不进入本阶段：
+Phase 3A 计划通过以下链路读取真实业务数据：
 
 ```text
-写操作
-提案发布
-确认后执行
-计划发布
-用户档案修改
-数据库写入
+Read-only Tool
+→ Domain Query Service
+→ Repository Port
+→ Persistence Adapter
 ```
 
-第一个正式内置工具是 `convert_weight_unit`，只完成 kg、lb、jin 的确定性单位换算，不进行 BMI、医学或训练判断。
+候选 Read Model：
 
-## 9. Tool Error 与 Runtime Error
+- UserProfile。
+- HealthConstraint。
+- Goal。
+- CurrentPlanView。
+- TrainingRecord / DailyActionExecution。
+- Observation。
+- ExecutionSummary。
 
-可作为 Tool Result 返回模型的错误：
+Agent Runtime 不直接知道这些模型的持久化细节。
 
-```text
-unknown_tool
-invalid_arguments
-tool_execution_failed
-invalid_tool_result
-```
+## 12. Safety 与受控写入
 
-Provider 网络、鉴权、限流、超时和协议错误不伪装成 Tool Result，直接收敛为 `MODEL_ERROR`。
-
-运行限制到达时返回 `LIMIT_REACHED`，并在 Trace 中记录限制类型，不记录完整 Prompt 或健康原文。
-
-## 10. 运行限制
-
-Phase 2A 默认建议：
-
-```text
-max_model_turns = 6
-max_tool_calls = 8
-timeout_seconds = 60
-```
-
-这些参数必须大于合法下限，并在 Runtime 创建时校验。
-
-本阶段使用同步执行，不引入 asyncio、后台 worker 或消息队列。
-
-## 11. INITIAL_PLANNING 兼容层
-
-`INITIAL_PLANNING` 当前只是 legacy compatibility adapter：
-
-- 可以保留旧 Planning Prompt、Input、Output 和 Schema。
-- 只能通过显式兼容入口调用。
-- 不再作为普通用户请求默认路径。
-- 不得反向要求通用 Runtime 使用 Program、Phase、WeeklyPlan 或 TodayAction。
-- 后续通用工具和领域能力成熟后再单独移除。
-
-## 12. Safety 与 Confirmation
-
-Phase 2A 不实现完整 Safety Guard 和 Confirmation Resume，但长期边界已经确定：
+完整 Safety Guard 必须由确定性代码实现：
 
 ```text
 Input Guard
 Pre-Tool Guard
-Pre-Publish Guard
+Pre-Proposal / Pre-Publish Guard
 Pre-Output Guard
 ```
 
-Safety 不能只作为模型可选 Tool。
-
-Confirmation 也不是普通 Tool，而是 Runtime 暂停与恢复协议：
+写入流程必须区分：
 
 ```text
-RUNNING
-→ PENDING_CONFIRMATION
-→ CONFIRMED / REJECTED
-→ RESUMED
+Clarification：普通补充信息
+Proposal：未执行候选
+Confirmation：用户批准高影响写入或发布
 ```
 
-这些能力必须在后续独立阶段实现，不得在 Phase 2A 中提前创建半成品状态机。
+Safety、Confirmation、幂等和审计不能仅依赖 Prompt 或模型自觉。
 
 ## 13. Persistence 与领域迁移
 
-后续 Python 模块化单体需要逐步迁移并保留旧实现中的关键语义：
+后续 Python 模块化单体需要迁移并保留：
 
 - PlanVersion 不可变发布语义。
 - revision 并发控制。
@@ -327,7 +343,7 @@ RUNNING
 - 追加写审计。
 - 已确认事实与模型候选的区分。
 
-在这些语义完成 Python 迁移前，不应声称 legacy 后端已可安全删除。
+在这些语义完成 Python 迁移前，不应声称 legacy 后端可以安全删除。
 
 ## 14. 可观测性
 
@@ -345,34 +361,15 @@ latency
 usage summary
 ```
 
-禁止记录：
-
-```text
-API key
-Authorization header
-完整用户健康原文
-完整 prompt
-raw model response
-Python traceback（对用户或模型）
-```
+禁止记录 API Key、Authorization header、完整用户健康原文、完整 Prompt、raw model response 或对用户暴露的 Python traceback。
 
 ## 15. 非目标
 
-当前架构不引入：
+当前不建设：
 
-- 微服务。
-- 消息队列。
-- Kubernetes。
-- 默认多 Agent 或 Subagent。
-- DAG/工作流引擎。
-- Shell、任意文件系统或任意 SQL Tool。
-- 未经确认的医学诊断或治疗能力。
-
-## 16. 文档边界
-
-- 产品定位与范围：[`product-scope.md`](product-scope.md)
-- 当前实施阶段与状态：[`mvp-exec-plan.md`](mvp-exec-plan.md)
-- Phase 2A 实施交接：[`implementation/phase-2a-read-only-tool-call-loop.md`](implementation/phase-2a-read-only-tool-call-loop.md)
-- 业务语义与不变量：[`domain-model.md`](domain-model.md)
-- 安全规则：[`safety-rules.md`](safety-rules.md)
-- 已确认决策：[`decisions/`](decisions/README.md)
+- 固定多角色流水线。
+- 默认多 Agent 编排。
+- 微服务与消息队列。
+- 任意代码执行工具。
+- 未经确认的健康事实写入。
+- 模型自动修改计划或增加训练风险。
