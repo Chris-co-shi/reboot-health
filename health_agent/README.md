@@ -1,23 +1,30 @@
 # Python Health Agent Runtime
 
-`health_agent/` 是 reboot-health 当前与目标 Python Runtime。产品运行入口直接使用 OpenAI-compatible Chat Completions Provider，不会在配置缺失时回退到测试替身。
+`health_agent/` 是 reboot-health 当前与目标 Python Runtime。产品运行入口直接使用 OpenAI-compatible Chat Completions Provider，不会在配置缺失时回退测试替身。
 
-当前状态：
+## 当前状态
 
 ```text
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
 Phase 2A 通用只读 Tool Call Agent Loop：DONE
-Phase 2B Runtime 确认、恢复与 JSON 持久化基础：DONE（显式启用）
+Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础：DONE_EXPLICIT
+Phase 2C Interactive Session & Conversation Context：READY / NEXT
 ```
 
-Agent Runtime 开发前必须读取：
+当前 Phase 2C 工程交接规范：
+
+[`../docs/implementation/phase-2c-interactive-session-cli.md`](../docs/implementation/phase-2c-interactive-session-cli.md)
+
+已完成 Phase 2A 验收参考：
 
 [`../docs/implementation/phase-2a-read-only-tool-call-loop.md`](../docs/implementation/phase-2a-read-only-tool-call-loop.md)
 
-## 当前运行模型
+## 当前用户体验
+
+当前入口是 one-shot CLI：
 
 ```text
-用户输入
+一次用户输入
 → 产品 Bootstrap
 → GenericAgentLoop
 → OpenAI-compatible Chat Completions
@@ -26,24 +33,18 @@ Agent Runtime 开发前必须读取：
 → role=tool Result
 → 下一轮真实模型
 → 最终自然语言回答
+→ 进程退出
 ```
 
-`INITIAL_PLANNING` 已完成真实 LLM 验收和去污染，但现在只保留为显式 legacy compatibility 入口；默认 main 和 console 不再进入该路径。
+这意味着：
 
-## Phase 2A 目标模型
+- 单次 Run 内支持模型与工具多回合。
+- 每个 `agent_console.py --user-text` 命令默认是新的进程和新的内存 Store。
+- Agent 可以在答案中提出问题，但当前 console 不会停下来继续读取下一轮用户输入。
+- 不同命令之间默认没有消息历史。
+- JSON Store 已实现，但默认入口没有启用。
 
-```text
-用户输入
-→ 通用 AgentLoop
-→ 真实 LLM
-→ Assistant content 或原生 Tool Call
-→ ToolRegistry / ToolExecutor
-→ role=tool Result
-→ 真实 LLM
-→ 最终自然语言回答
-```
-
-Phase 2A 只实现只读或纯计算 Tool，不接数据库、写操作、Safety Guard、Confirmation 或 Memory。
+Phase 2C 将新增交互式 `scripts/agent_chat.py`，复用同一 Runtime Components 和 `session_id`，并支持显式 JSON Session 恢复。
 
 ## 目录结构
 
@@ -51,16 +52,15 @@ Phase 2A 只实现只读或纯计算 Tool，不接数据库、写操作、Safety
 health_agent/
   agent/
     bootstrap.py     # 产品 Composition Root
-    runtime/         # Core、Loop、Session、Context、Trace、State
-    models/          # 通用 ModelProvider 合同与 OpenAI-compatible Provider
-    tools/           # Tool contract、registry、executor 和内置只读工具
-    skills/          # 临时 INITIAL_PLANNING 兼容 Skill
+    runtime/         # Loop、Session、Confirmation、Lease、Checkpoint、Recovery、Trace
+    models/          # ModelProvider 与 OpenAI-compatible Provider
+    tools/           # Tool contract、registry、executor 和只读内置工具
+    skills/          # INITIAL_PLANNING legacy compatibility
     schemas/         # Agent、Planning、Tool、Memory、Health Schema
     memory/          # MemoryCandidate 骨架，不持久化
     api/             # API 层预留，当前不接 Web 框架
-  skills/            # 外置 Prompt 与 Skill metadata
-  prompts/           # 公共 Prompt；Phase 2A 将加入通用 Agent system prompt
-  scripts/           # 本地 console
+  prompts/           # 通用 Agent system prompt
+  scripts/           # one-shot console；Phase 2C 将新增 interactive chat
   tests/             # unittest 和测试专用 scripted provider
 ```
 
@@ -70,34 +70,30 @@ health_agent/
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| OpenAI-compatible Provider | `DONE` | 实现 `complete_turn()`，支持普通文本、Tool Call、usage 和 metadata 解析。 |
-| 产品 Bootstrap | `DONE` | 加载 `health_agent/.env`，创建真实 Provider、只读 ToolRegistry、ToolExecutor 和 GenericAgentLoop。 |
-| INITIAL_PLANNING | `LEGACY_COMPAT` | 真实 LLM 可运行；不再注入固定健康事实；后续显式隔离。 |
-| 通用 ModelMessage Tool 消息 | `DONE` | 支持 assistant tool_calls、role=tool、tool_call_id 和完整消息往返。 |
-| ToolRegistry / ToolExecutor | `DONE` | 只读白名单注册、模型 Schema 输出、确定性执行和结构化 Tool Result。 |
-| convert_weight_unit | `DONE` | 正式只读产品工具，支持 kg、lb、jin 确定性换算。 |
-| Tool Call Agent Loop | `DONE` | 支持直接回答、单/多 Tool Call、Tool Error 回送、运行限制和真实 LLM Tool Call 验收。 |
-| JSON Runtime Store | `DONE_EXPLICIT` | 可显式为 AgentSession 和 PendingAction 启用本地 JSON 持久化；默认产品入口仍使用内存 Store。 |
-| Confirmation Runtime | `DONE_EXPLICIT` | 支持一次性批准、恢复执行和最终收敛；尚未提供 Console/API 命令或正式写操作 Tool。 |
-| Session Lease / Fencing | `DONE_EXPLICIT` | RUNNING Session 持有 active run、fence generation、heartbeat 和 lease，旧 owner 失去 fence 后不得继续写入。 |
-| Execution Checkpoint / Recovery | `DONE_EXPLICIT` | 记录 drive/model/tool/finalizing checkpoint；仅 `DRIVE_READY` 可自动恢复，in-flight 状态 fail-closed。 |
-| Orphan PendingAction Maintenance | `DONE_EXPLICIT` | 提供显式 scan/cleanup，过期未引用 PENDING 可转 EXPIRED，旧终态 orphan 可 CAS 删除。 |
-| Persistence / API Server | `TODO` | 不接 FastAPI、数据库、Redis、消息队列或后台 worker。 |
-| 完整 Safety / 产品级 Confirmation UX | `TODO` | 必须在后续独立阶段实现。 |
-| 历史 HTTP 链路 | `LEGACY_UNAVAILABLE` | 旧跨运行时链路不是当前产品入口。 |
+| OpenAI-compatible Provider | `DONE` | 支持普通文本、Tool Call、usage 和 metadata 解析 |
+| 产品 Bootstrap | `DONE` | 组装真实 Provider、ToolRegistry、ToolExecutor 和 GenericAgentLoop |
+| INITIAL_PLANNING | `LEGACY_COMPAT` | 仅显式兼容入口，不是默认产品路径 |
+| ModelMessage Tool 消息 | `DONE` | assistant tool_calls、role=tool、tool_call_id 完整往返 |
+| ToolRegistry / ToolExecutor | `DONE` | 只读白名单、参数校验、确定性执行和结构化错误 |
+| convert_weight_unit | `DONE` | kg、lb、jin 确定性换算 |
+| Tool Call Agent Loop | `DONE` | 直接回答、单/多 Tool Call、限制与错误收敛 |
+| JSON Runtime Store | `DONE_EXPLICIT` | Session/PendingAction 本地 JSON 持久化，默认入口未启用 |
+| Confirmation Runtime | `DONE_EXPLICIT` | 底层批准、拒绝和恢复协议，尚无产品 CLI/API 入口 |
+| Lease / Fencing | `DONE_EXPLICIT` | RUNNING owner、heartbeat、lease 与 fence generation |
+| Checkpoint / Recovery | `DONE_EXPLICIT` | 仅 DRIVE_READY 自动恢复，其余 in-flight 状态 fail-closed |
+| Orphan Maintenance | `DONE_EXPLICIT` | 显式扫描、过期和清理 orphan PendingAction |
+| Interactive Session CLI | `READY` | 当前下一阶段 |
+| 健康领域 Repository / Read Tools | `TODO` | 尚不能读取真实档案、计划或训练记录 |
+| 完整 Safety / 写操作 / API | `TODO` | 后续独立阶段 |
 
 ## 配置
 
 产品入口默认读取 `health_agent/.env`。从仓库根目录或 `health_agent/` 目录运行都会解析同一个文件，且 shell 环境变量优先于 `.env`。
 
-推荐本地方式：
-
 ```bash
 cd health_agent
 cp .env.example .env
 ```
-
-编辑 `health_agent/.env`：
 
 ```dotenv
 LLM_BASE_URL=https://api.example.com/v1
@@ -108,20 +104,37 @@ LLM_TIMEOUT_SECONDS=60
 
 缺少 `LLM_BASE_URL`、`LLM_API_KEY` 或 `LLM_MODEL` 时，Bootstrap 会明确失败。
 
-诊断日志默认不输出完整 prompt、完整健康原文、完整模型响应或 API key。
+诊断日志默认不输出完整 Prompt、完整健康原文、完整模型响应或 API Key。
+
+## 当前直接使用
+
+```bash
+cd health_agent
+python3 -m agent.main --user-text "190 斤是多少公斤？请调用工具计算。"
+python3 scripts/agent_console.py --user-text "用简单的话解释渐进超负荷。"
+```
+
+输出为安全摘要：
+
+```text
+status / modelTurns / toolCalls / finishReason / answer
+```
+
+当前 console 不支持：
+
+- 启动后持续输入。
+- Agent 提问后等待用户下一轮回答。
+- 默认跨进程恢复。
+- Session 列表、切换或删除。
 
 ## 本地 JSON Runtime Store
 
-默认产品入口仍使用 `InMemorySessionStore` 和 `InMemoryPendingActionStore`，因此
-`agent.main` 与 `scripts/agent_console.py` 不会自动把会话写入磁盘。Slice 5A
-只提供显式注入的本地 JSON Adapter，供后续 CLI/API 在明确配置目录、lease 和
-恢复策略后接入。
+默认产品入口使用 `InMemorySessionStore` 和 `InMemoryPendingActionStore`。
 
-显式启用方式：
+显式启用：
 
 ```python
 from pathlib import Path
-
 from agent.bootstrap import create_generic_runtime_components_from_env
 
 components = create_generic_runtime_components_from_env(
@@ -130,7 +143,7 @@ components = create_generic_runtime_components_from_env(
 )
 ```
 
-实际目录布局：
+目录布局：
 
 ```text
 runtime-state/
@@ -142,34 +155,40 @@ runtime-state/
     <sha256(action_id)>.lock
 ```
 
-Store 使用 SHA-256 文件键防止 path traversal，JSON 内仍保存真实 `session_id` /
-`action_id`，读取时会校验文件内容 ID 与请求 ID 一致。`create()` 与 `save()` 在
-实体级跨进程 lock 内执行；`save(expected_version=...)` 会重新读取磁盘当前
-version 后再做 CAS，不使用进程内缓存覆盖磁盘。
+Store 使用 SHA-256 文件键、实体级跨进程锁、CAS 和原子替换。
 
-写入顺序为同目录临时文件、UTF-8 写入、flush、fsync、权限设置、`os.replace`
-原子替换，以及 POSIX 上 best-effort 目录 fsync。macOS/Linux 使用 `fcntl.flock`，
-Windows 使用标准库 `msvcrt.locking` 做 best-effort advisory lock。目录权限默认
-尝试设为 `0700`，JSON 与 lock 文件默认尝试设为 `0600`。
+注意：JSON 文件是本地明文，可能包含用户消息、assistant 消息、Tool Result 和 PendingAction arguments。本能力只适合受控本地环境，不声明医疗数据合规能力。
 
-注意：JSON 文件是本地明文，可能包含用户消息、assistant 消息、Tool Result 和
-PendingAction arguments。本 Slice 不实现静态加密，不声明医疗数据合规能力，只适合
-受控本地环境。
+## Session、Context 与 Memory
+
+项目明确区分：
+
+```text
+Session Message History：连续对话技术状态
+Runtime Context：当前模型回合输入
+Conversation Summary：上下文压缩，不是健康事实
+Domain Facts：UserProfile、HealthConstraint、Goal、Plan、Records
+Memory Candidate：模型推断候选，确认前不得生效
+```
+
+详细决策：
+
+[`../docs/decisions/0011-session-context-memory-boundaries.md`](../docs/decisions/0011-session-context-memory-boundaries.md)
+
+普通澄清问题不创建 PendingAction。PendingAction 只用于未来高影响 Tool、写入或发布审批。
 
 ## 运行租约、恢复与 orphan 维护
 
-Runtime 在 RUNNING Session 上持久化 `active_run_id`、`run_fence_generation`、
-heartbeat、lease 和 execution checkpoint。每次运行必须先 claim ownership，写回前
-校验 fence；如果旧 run 的 lease 过期，新 run 可以接管并提升 generation。
+Runtime 在 RUNNING Session 上持久化 `active_run_id`、`run_fence_generation`、heartbeat、lease 和 execution checkpoint。
 
-恢复策略是保守的：`DRIVE_READY` 表示还没有进入外部模型或工具调用，可自动恢复；
-`MODEL_CALL_IN_FLIGHT`、`TOOL_CALL_IN_FLIGHT` 与 `FINALIZING` 都不会自动重放，以避免
-重复模型调用、重复工具副作用或覆盖不确定终态。
+恢复策略：
 
-PendingAction orphan 维护必须显式调用。默认 `dry_run=True` 只返回不含
-`arguments` / `result_content` 的摘要；非 dry-run 也只会 CAS 过期未引用的 `PENDING`
-和删除超过 retention 的未引用终态 Action。`APPROVED` 与 `EXECUTING` 永不自动重试、
-失败或删除。
+- `DRIVE_READY`：可安全恢复。
+- `MODEL_CALL_IN_FLIGHT`：不自动重放。
+- `TOOL_CALL_IN_FLIGHT`：不自动重放。
+- `FINALIZING`：不自动覆盖。
+
+PendingAction orphan 维护必须显式调用；默认 dry-run 不返回 arguments 或 result content。
 
 ## 验证
 
@@ -184,40 +203,16 @@ python3 -m unittest tests.test_orphan_pending_actions -v
 git diff --check
 ```
 
-真实 LLM 集成测试位于 `tests/integration/test_real_llm_provider.py`。只有显式设置 `RUN_LLM_INTEGRATION=1` 且必要配置存在时才调用真实 LLM；默认 skip。
-
-Phase 2A 真实 Tool Call 集成测试位于 `tests/integration/test_real_tool_call_loop.py`，同样需要显式设置 `RUN_LLM_INTEGRATION=1`。
+真实 LLM 集成测试必须显式设置 `RUN_LLM_INTEGRATION=1`。
 
 Phase 2A 验收摘要：
 
 ```text
-确定性测试：145 个，全部通过，默认跳过 2 个显式真实集成测试
+确定性测试：145 个通过，默认跳过 2 个真实集成测试
 真实模型调用轮数：2
 真实工具调用次数：1
 真实工具名称：convert_weight_unit
 真实转换结果：190 jin → 95 kg
-真实入口不经过 INITIAL_PLANNING
-```
-
-Phase 2A 边界检查：
-
-```bash
-rg "MockProvider|ScriptedModelProvider" agent scripts
-rg "eval\\(|exec\\(|subprocess|os\\.system" agent/tools agent/runtime
-```
-
-## 当前本地入口
-
-```bash
-cd health_agent
-python3 -m agent.main
-python3 scripts/agent_console.py --user-text "190 斤是多少公斤？请调用可用的重量转换工具，不要自行心算。"
-```
-
-当前入口使用通用 GenericAgentLoop，输出安全摘要：
-
-```text
-status / modelTurns / toolCalls / answer
 ```
 
 ## 开发阅读顺序
@@ -227,17 +222,15 @@ status / modelTurns / toolCalls / answer
 → AGENTS.md
 → ../docs/architecture.md
 → ../docs/mvp-exec-plan.md
-→ ../docs/implementation/phase-2a-read-only-tool-call-loop.md
+→ ../docs/decisions/0011-session-context-memory-boundaries.md
+→ ../docs/implementation/phase-2c-interactive-session-cli.md
 → README.md
 ```
 
 ## 边界
 
 - 不做医学诊断，不替代医生意见。
-- 不开放 shell tool、任意文件系统 tool 或任意 SQL tool。
+- 不开放 shell、任意文件系统或任意 SQL Tool。
 - 不把模型输出写成已保存、已确认、已发布或已生效。
-- 不记录完整健康原文、认证信息、API key、完整 prompt 或完整 raw response。
-- Phase 2A 不实现 FastAPI、数据库、Safety Guard、Confirmation Resume、Memory、Plan 发布、写操作 Tool 或多 Agent。
-- Phase 2B Runtime Slice 只提供显式 JSON Store、确认恢复协议、lease/fence、checkpoint、stale recovery 和 orphan 维护；不提供后台 worker、Console/API 确认命令、正式写操作 Tool、Memory 或产品级 Safety。
-
-详细架构见 [`../docs/architecture.md`](../docs/architecture.md)，阶段状态见 [`../docs/mvp-exec-plan.md`](../docs/mvp-exec-plan.md)。
+- 不记录完整健康原文、认证信息、API Key、完整 Prompt 或 raw response。
+- Phase 2C 不实现健康领域数据库、长期 Memory、Safety Guard、正式写操作、FastAPI 或多 Agent。
