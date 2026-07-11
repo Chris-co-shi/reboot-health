@@ -27,6 +27,18 @@ from agent.runtime.storage.json_codec import (
     session_from_payload,
     session_to_payload,
 )
+from agent.runtime.storage.json_pending_action_store import (
+    JsonFilePendingActionStore,
+    JsonPendingActionStoreDataCorrupted,
+    JsonPendingActionStoreIOError,
+    JsonPendingActionStoreUnsupportedSchema,
+)
+from agent.runtime.storage.json_session_store import (
+    JsonFileSessionStore,
+    JsonSessionStoreDataCorrupted,
+    JsonSessionStoreIOError,
+    JsonSessionStoreUnsupportedSchema,
+)
 
 __all__ = [
     "FILE_MODE",
@@ -35,6 +47,14 @@ __all__ = [
     "JsonStoreError",
     "JsonStoreIOError",
     "JsonStoreUnsupportedSchema",
+    "JsonFilePendingActionStore",
+    "JsonFileSessionStore",
+    "JsonPendingActionStoreDataCorrupted",
+    "JsonPendingActionStoreIOError",
+    "JsonPendingActionStoreUnsupportedSchema",
+    "JsonSessionStoreDataCorrupted",
+    "JsonSessionStoreIOError",
+    "JsonSessionStoreUnsupportedSchema",
     "PENDING_ACTION_ENTITY_TYPE",
     "SCHEMA_VERSION",
     "SESSION_ENTITY_TYPE",

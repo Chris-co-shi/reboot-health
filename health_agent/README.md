@@ -76,6 +76,7 @@ health_agent/
 | ToolRegistry / ToolExecutor | `DONE` | 只读白名单注册、模型 Schema 输出、确定性执行和结构化 Tool Result。 |
 | convert_weight_unit | `DONE` | 正式只读产品工具，支持 kg、lb、jin 确定性换算。 |
 | Tool Call Agent Loop | `DONE` | 支持直接回答、单/多 Tool Call、Tool Error 回送、运行限制和真实 LLM Tool Call 验收。 |
+| JSON Runtime Store | `DONE_EXPLICIT` | 可显式为 AgentSession 和 PendingAction 启用本地 JSON 持久化；默认产品入口仍使用内存 Store。 |
 | Persistence / API Server | `TODO` | 不接 FastAPI、数据库、Redis 或消息队列。 |
 | Safety / Confirmation | `TODO` | 必须在后续独立阶段实现。 |
 | 历史 HTTP 链路 | `LEGACY_UNAVAILABLE` | 旧跨运行时链路不是当前产品入口。 |
@@ -104,12 +105,59 @@ LLM_TIMEOUT_SECONDS=60
 
 诊断日志默认不输出完整 prompt、完整健康原文、完整模型响应或 API key。
 
+## 本地 JSON Runtime Store
+
+默认产品入口仍使用 `InMemorySessionStore` 和 `InMemoryPendingActionStore`，因此
+`agent.main` 与 `scripts/agent_console.py` 不会自动把会话写入磁盘。Slice 5A
+只提供显式注入的本地 JSON Adapter，供后续 CLI/API 在明确配置目录、lease 和
+恢复策略后接入。
+
+显式启用方式：
+
+```python
+from pathlib import Path
+
+from agent.bootstrap import create_generic_runtime_components_from_env
+
+components = create_generic_runtime_components_from_env(
+    storage_mode="json",
+    storage_directory=Path("runtime-state"),
+)
+```
+
+实际目录布局：
+
+```text
+runtime-state/
+  sessions/
+    <sha256(session_id)>.json
+    <sha256(session_id)>.lock
+  pending-actions/
+    <sha256(action_id)>.json
+    <sha256(action_id)>.lock
+```
+
+Store 使用 SHA-256 文件键防止 path traversal，JSON 内仍保存真实 `session_id` /
+`action_id`，读取时会校验文件内容 ID 与请求 ID 一致。`create()` 与 `save()` 在
+实体级跨进程 lock 内执行；`save(expected_version=...)` 会重新读取磁盘当前
+version 后再做 CAS，不使用进程内缓存覆盖磁盘。
+
+写入顺序为同目录临时文件、UTF-8 写入、flush、fsync、权限设置、`os.replace`
+原子替换，以及 POSIX 上 best-effort 目录 fsync。macOS/Linux 使用 `fcntl.flock`，
+Windows 使用标准库 `msvcrt.locking` 做 best-effort advisory lock。目录权限默认
+尝试设为 `0700`，JSON 与 lock 文件默认尝试设为 `0600`。
+
+注意：JSON 文件是本地明文，可能包含用户消息、assistant 消息、Tool Result 和
+PendingAction arguments。本 Slice 不实现静态加密，不声明医疗数据合规能力，只适合
+受控本地环境。
+
 ## 验证
 
 ```bash
 cd health_agent
 python3 -m compileall agent tests
 python3 -m unittest discover -s tests -v
+python3 -m unittest tests.test_json_store_multiprocess -v
 ```
 
 真实 LLM 集成测试位于 `tests/integration/test_real_llm_provider.py`。只有显式设置 `RUN_LLM_INTEGRATION=1` 且必要配置存在时才调用真实 LLM；默认 skip。

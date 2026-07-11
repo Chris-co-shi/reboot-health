@@ -16,6 +16,7 @@ from agent.runtime.generic_loop import GenericAgentLoop
 from agent.runtime.loop import AgentLoop, LoopLimits
 from agent.runtime.pending_action_store import InMemoryPendingActionStore
 from agent.runtime.session import InMemorySessionStore
+from agent.runtime.storage import JsonFilePendingActionStore, JsonFileSessionStore
 from agent.tools.builtin.convert_weight import CONVERT_WEIGHT_UNIT_TOOL_NAME
 from agent.tools.contract import ToolPermission
 
@@ -86,6 +87,56 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
         definitions = components.tool_registry.list()
         self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
         self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
+
+    def test_generic_runtime_components_can_use_explicit_json_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            storage_directory = Path(directory) / "runtime-state"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    components = create_generic_runtime_components_from_env(
+                        dotenv_path=missing_dotenv,
+                        storage_mode="json",
+                        storage_directory=storage_directory,
+                    )
+
+            self.assertIsInstance(components.session_store, JsonFileSessionStore)
+            self.assertIsInstance(components.pending_action_store, JsonFilePendingActionStore)
+            self.assertIs(components.loop.session_store, components.session_store)
+            self.assertIs(components.loop.pending_action_store, components.pending_action_store)
+            self.assertIs(
+                components.confirmation_coordinator.session_store,
+                components.session_store,
+            )
+            self.assertIs(
+                components.confirmation_coordinator.pending_action_store,
+                components.pending_action_store,
+            )
+            self.assertTrue((storage_directory / "sessions").is_dir())
+            self.assertTrue((storage_directory / "pending-actions").is_dir())
+
+    def test_generic_runtime_json_storage_requires_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    with self.assertRaises(ValueError):
+                        create_generic_runtime_components_from_env(
+                            dotenv_path=missing_dotenv,
+                            storage_mode="json",
+                        )
+
+    def test_generic_runtime_rejects_unknown_storage_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    with self.assertRaises(ValueError):
+                        create_generic_runtime_components_from_env(
+                            dotenv_path=missing_dotenv,
+                            storage_mode="sqlite",
+                            storage_directory=Path(directory) / "runtime-state",
+                        )
 
     def test_generic_bootstrap_returns_independent_runtime_instances(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
