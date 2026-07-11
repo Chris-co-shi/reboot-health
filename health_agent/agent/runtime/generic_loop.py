@@ -54,6 +54,9 @@ ERROR_SESSION_STILL_WAITING_CONFIRMATION = "SESSION_STILL_WAITING_CONFIRMATION"
 ERROR_SESSION_ALREADY_RUNNING = "SESSION_ALREADY_RUNNING"
 ERROR_SESSION_CONTINUATION_INVALID = "SESSION_CONTINUATION_INVALID"
 ERROR_SESSION_MESSAGE_HISTORY_INVALID = "SESSION_MESSAGE_HISTORY_INVALID"
+ERROR_SESSION_FINALIZATION_PERSIST_FAILED = "SESSION_FINALIZATION_PERSIST_FAILED"
+ERROR_SESSION_FINALIZATION_STATE_UNKNOWN = "SESSION_FINALIZATION_STATE_UNKNOWN"
+ERROR_SESSION_OWNERSHIP_LOST = "SESSION_OWNERSHIP_LOST"
 ERROR_PENDING_ACTION_CREATE_FAILED = "PENDING_ACTION_CREATE_FAILED"
 TOOL_POLICY_DENIED = "tool_policy_denied"
 DEFAULT_CONFIRMATION_TTL_SECONDS = 15 * 60
@@ -450,10 +453,18 @@ class GenericAgentLoop:
                 )
             except ProviderResponseError as exc:
                 trace.warnings.append(exc.safe_summary)
-                state.session = self._best_effort_status(
-                    state.session,
-                    AgentSessionStatus.FAILED,
+                finalized = self._finalize_owned_session(
+                    trace=trace,
+                    session=state.session,
+                    target_status=AgentSessionStatus.FAILED,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    finish_reason=state.finish_reason,
                 )
+                if isinstance(finalized, AgentRunResult):
+                    return finalized
+                state.session = finalized
                 self.trace_recorder.finish(trace, GENERIC_STATUS_MODEL_ERROR)
                 self.trace_recorder.record_step(
                     trace,
@@ -546,10 +557,18 @@ class GenericAgentLoop:
 
             final_text = str(response.content or "").strip()
             if not final_text:
-                state.session = self._best_effort_status(
-                    state.session,
-                    AgentSessionStatus.FAILED,
+                finalized = self._finalize_owned_session(
+                    trace=trace,
+                    session=state.session,
+                    target_status=AgentSessionStatus.FAILED,
+                    started=state.started,
+                    model_turns=state.model_turns,
+                    tool_calls=state.tool_calls,
+                    finish_reason=response.finish_reason,
                 )
+                if isinstance(finalized, AgentRunResult):
+                    return finalized
+                state.session = finalized
                 self.trace_recorder.finish(trace, GENERIC_STATUS_INVALID_RESPONSE)
                 self.trace_recorder.record_step(
                     trace,
@@ -576,10 +595,18 @@ class GenericAgentLoop:
                     ),
                 )
 
-            state.session = self._best_effort_status(
-                state.session,
-                AgentSessionStatus.COMPLETED,
+            finalized = self._finalize_owned_session(
+                trace=trace,
+                session=state.session,
+                target_status=AgentSessionStatus.COMPLETED,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=response.finish_reason,
             )
+            if isinstance(finalized, AgentRunResult):
+                return finalized
+            state.session = finalized
             self.trace_recorder.finish(trace, GENERIC_STATUS_COMPLETED)
             self.trace_recorder.record_step(
                 trace,
@@ -1274,7 +1301,6 @@ class GenericAgentLoop:
             )
 
         session.status = AgentSessionStatus.WAITING_CONFIRMATION
-        session.active_run_id = None
         session.pending_action_id = action.action_id
         session.continuation = AgentContinuation(
             originating_run_id=originating_run_id,
@@ -1286,20 +1312,17 @@ class GenericAgentLoop:
             deadline_at=deadline_at,
             remaining_runtime_seconds=remaining_runtime_seconds,
         )
-        try:
-            session = self.session_store.save(session, expected_version=session.version)
-        except SessionStoreError as exc:
-            return self._session_error_result(
-                trace=trace,
-                session_id=session.session_id,
-                started=started,
-                model_turns=model_turns,
-                tool_calls=tool_calls,
-                messages=tuple(session.messages),
-                error_code=_session_error_code(exc),
-                message="Session could not be saved for confirmation pause",
-                session=session,
-            )
+        finalized = self._finalize_owned_session(
+            trace=trace,
+            session=session,
+            target_status=AgentSessionStatus.WAITING_CONFIRMATION,
+            started=started,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+        )
+        if isinstance(finalized, AgentRunResult):
+            return finalized
+        session = finalized
 
         self.trace_recorder.record_step(
             trace,
@@ -1377,8 +1400,19 @@ class GenericAgentLoop:
     ) -> AgentRunResult:
         """构造会话一致性错误结果，统一 fail closed。"""
 
-        if release_session and session is not None:
-            session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+        if release_session and session is not None and session.status == AgentSessionStatus.RUNNING:
+            finalized = self._finalize_owned_session(
+                trace=trace,
+                session=session,
+                target_status=AgentSessionStatus.FAILED,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+            )
+            if isinstance(finalized, AgentRunResult):
+                return finalized
+            session = finalized
             messages = tuple(session.messages)
         self.trace_recorder.finish(trace, GENERIC_STATUS_FAILED)
         self.trace_recorder.record_step(
@@ -1403,22 +1437,194 @@ class GenericAgentLoop:
             error=AgentRunError(code=error_code, message=message),
         )
 
-    def _best_effort_status(
+    def _finalize_owned_session(
         self,
+        *,
+        trace,
         session: AgentSession,
-        status: AgentSessionStatus,
-    ) -> AgentSession:
-        """尽力保存终态；失败时不覆盖原始运行结果。"""
+        target_status: AgentSessionStatus,
+        started: float,
+        model_turns: int,
+        tool_calls: int,
+        finish_reason: str | None = None,
+    ) -> AgentSession | AgentRunResult:
+        """严格持久化当前 run 的终态，并在保存异常后做一次安全对账。
 
-        session.status = status
+        这里是 `RUNNING / active_run_id` 的唯一释放边界。只有当前 run 仍拥有
+        `active_run_id` 时才会清空 owner；如果 CAS 保存失败，会重新读取 Store
+        判断“已提交但 ack 丢失”、确实未提交、owner 已变化或状态未知。任何无法确
+        认的情况都返回稳定 finalization 错误，避免把未持久化的完成态伪装成成功。
+        """
+
+        if session.active_run_id != trace.run_id:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_OWNERSHIP_LOST,
+                message="The agent run could not finalize because session ownership changed.",
+                finish_reason=finish_reason,
+            )
+
+        expected_version = session.version
+        session.status = target_status
         session.active_run_id = None
-        if status != AgentSessionStatus.WAITING_CONFIRMATION:
+        if target_status != AgentSessionStatus.WAITING_CONFIRMATION:
             session.pending_action_id = None
             session.continuation = None
         try:
             return self.session_store.save(session, expected_version=session.version)
         except SessionStoreError:
-            return session
+            return self._reconcile_finalization_failure(
+                trace=trace,
+                expected_session=session,
+                expected_version=expected_version,
+                target_status=target_status,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
+            )
+
+    def _reconcile_finalization_failure(
+        self,
+        *,
+        trace,
+        expected_session: AgentSession,
+        expected_version: int,
+        target_status: AgentSessionStatus,
+        started: float,
+        model_turns: int,
+        tool_calls: int,
+        finish_reason: str | None,
+    ) -> AgentSession | AgentRunResult:
+        """保存抛错后的 read-after-failure 对账。
+
+        真实持久化系统可能“提交成功但响应失败”。因此保存异常后只读取一次当前
+        Session：若已是预期终态就接受该终态；若仍由当前 run 占用则明确失败；若
+        owner 或版本已被其他执行者改变，则拒绝覆盖；若连读取都失败，则返回状态未知。
+        """
+
+        try:
+            stored = self.session_store.get(expected_session.session_id)
+        except SessionStoreError:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=expected_session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(expected_session.messages),
+                error_code=ERROR_SESSION_FINALIZATION_STATE_UNKNOWN,
+                message=(
+                    "The agent run finished locally, but the session finalization "
+                    "state could not be confirmed."
+                ),
+                finish_reason=finish_reason,
+            )
+
+        if stored is None:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=expected_session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(expected_session.messages),
+                error_code=ERROR_SESSION_FINALIZATION_STATE_UNKNOWN,
+                message=(
+                    "The agent run finished locally, but the session finalization "
+                    "state could not be confirmed."
+                ),
+                finish_reason=finish_reason,
+            )
+
+        if _session_matches_finalized_target(
+            stored=stored,
+            expected=expected_session,
+            expected_version=expected_version,
+            target_status=target_status,
+        ):
+            return stored
+
+        if stored.active_run_id == trace.run_id:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=expected_session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(stored.messages),
+                error_code=ERROR_SESSION_FINALIZATION_PERSIST_FAILED,
+                message=(
+                    "The agent run finished locally, but the session state could "
+                    "not be persisted."
+                ),
+                finish_reason=finish_reason,
+            )
+
+        return self._finalization_error_result(
+            trace=trace,
+            session_id=expected_session.session_id,
+            started=started,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            messages=tuple(stored.messages),
+            error_code=ERROR_SESSION_OWNERSHIP_LOST,
+            message="The agent run could not finalize because session ownership changed.",
+            finish_reason=finish_reason,
+        )
+
+    def _finalization_error_result(
+        self,
+        *,
+        trace,
+        session_id: str,
+        started: float,
+        model_turns: int,
+        tool_calls: int,
+        messages: tuple[ModelMessage, ...],
+        error_code: str,
+        message: str,
+        finish_reason: str | None = None,
+    ) -> AgentRunResult:
+        """返回安全的 finalization 错误，不泄露 Store 细节或尝试二次释放。"""
+
+        self.trace_recorder.finish(trace, GENERIC_STATUS_FAILED)
+        self.trace_recorder.record_step(
+            trace,
+            "session_finalization_failed",
+            {
+                "modelTurns": model_turns,
+                "toolCallCount": tool_calls,
+                "errorCode": error_code,
+                "elapsedMs": self._elapsed_ms(started),
+            },
+        )
+        self.trace_recorder.record_step(
+            trace,
+            "run_finished",
+            {
+                "finalStatus": GENERIC_STATUS_FAILED,
+                "modelTurns": model_turns,
+                "toolCallCount": tool_calls,
+                "errorCode": error_code,
+                "elapsedMs": self._elapsed_ms(started),
+            },
+        )
+        return self._result(
+            trace=trace,
+            session_id=session_id,
+            status=GENERIC_STATUS_FAILED,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            messages=messages,
+            error=AgentRunError(code=error_code, message=message),
+        )
 
     def _wall_clock_now(self) -> datetime:
         """返回本次运行的 wall-clock 时间，支持测试注入。"""
@@ -1475,7 +1681,18 @@ class GenericAgentLoop:
         limit_type: str,
         finish_reason: str | None = None,
     ) -> AgentRunResult:
-        session = self._best_effort_status(session, AgentSessionStatus.FAILED)
+        finalized = self._finalize_owned_session(
+            trace=trace,
+            session=session,
+            target_status=AgentSessionStatus.FAILED,
+            started=started,
+            model_turns=model_turns,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+        )
+        if isinstance(finalized, AgentRunResult):
+            return finalized
+        session = finalized
         messages = tuple(session.messages)
         self.trace_recorder.finish(trace, GENERIC_STATUS_LIMIT_REACHED)
         self.trace_recorder.record_step(
@@ -1585,6 +1802,30 @@ def _tool_result_counts(messages: list[ModelMessage] | tuple[ModelMessage, ...])
         if message.role == "tool" and message.tool_call_id:
             counts[message.tool_call_id] = counts.get(message.tool_call_id, 0) + 1
     return counts
+
+
+def _session_matches_finalized_target(
+    *,
+    stored: AgentSession,
+    expected: AgentSession,
+    expected_version: int,
+    target_status: AgentSessionStatus,
+) -> bool:
+    """判断保存异常后的 read-back 是否已是当前 run 的目标终态。
+
+    该判断刻意只比较外部可验证的不变量：目标状态、owner 已释放、消息历史、
+    confirmation 指针和 continuation，以及 version 已经推进。它不比较 updated_at，
+    因为不同 Store 会在提交时生成自己的更新时间。
+    """
+
+    return (
+        stored.status == target_status
+        and stored.active_run_id is None
+        and stored.pending_action_id == expected.pending_action_id
+        and stored.continuation == expected.continuation
+        and stored.messages == expected.messages
+        and stored.version > expected_version
+    )
 
 
 def _policy_denied_result(

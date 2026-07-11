@@ -6,8 +6,8 @@ from typing import Any, Mapping
 from agent.models import ModelMessage, ModelResponse, ModelToolCall
 from agent.runtime.continuation import AgentContinuation
 from agent.runtime.generic_loop import (
+    ERROR_SESSION_FINALIZATION_PERSIST_FAILED,
     ERROR_SESSION_STATE_CONFLICT,
-    ERROR_SESSION_VERSION_CONFLICT,
     GENERIC_STATUS_COMPLETED,
     GENERIC_STATUS_FAILED,
     GENERIC_STATUS_WAITING_CONFIRMATION,
@@ -314,12 +314,12 @@ class GenericAgentLoopConfirmationPauseTest(unittest.TestCase):
         )
 
         self.assertEqual(result.status, GENERIC_STATUS_FAILED)
-        self.assertEqual(result.error.code, ERROR_SESSION_VERSION_CONFLICT)
+        self.assertEqual(result.error.code, ERROR_SESSION_FINALIZATION_PERSIST_FAILED)
         self.assertEqual(calls["confirmation"], 0)
         self.assertIsNotNone(pending_store.get("action-1"))
         failed_session = session_store.get(result.session_id)
-        self.assertEqual(failed_session.status, AgentSessionStatus.FAILED)
-        self.assertIsNone(failed_session.active_run_id)
+        self.assertEqual(failed_session.status, AgentSessionStatus.RUNNING)
+        self.assertEqual(failed_session.active_run_id, result.run_id)
         self.assertIsNone(failed_session.pending_action_id)
 
 
