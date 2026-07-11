@@ -61,6 +61,12 @@ _ALLOWED_TRANSITIONS = {
     },
 }
 
+_TERMINAL_STATUSES = {
+    PendingActionStatus.EXECUTED,
+    PendingActionStatus.FAILED,
+    PendingActionStatus.REJECTED,
+}
+
 
 @dataclass(frozen=True)
 class PendingAction:
@@ -79,6 +85,10 @@ class PendingAction:
     arguments_hash: str = ""
     status: PendingActionStatus = PendingActionStatus.PENDING
     idempotency_key: str = ""
+    result_content: str | None = None
+    result_error_code: str | None = None
+    resolved_at: datetime | None = None
+    decision_reason: str | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
     version: int = 0
@@ -138,6 +148,25 @@ class PendingAction:
             idempotency_key = f"pending-action:{self.action_id}"
         object.__setattr__(self, "idempotency_key", idempotency_key)
 
+        result_content = _normalize_result_content(self.result_content)
+        result_error_code = str(self.result_error_code or "").strip() or None
+        resolved_at = (
+            _require_aware_utc(self.resolved_at, "resolved_at")
+            if self.resolved_at is not None
+            else None
+        )
+        decision_reason = _normalize_decision_reason(self.decision_reason)
+        _validate_result_snapshot(
+            status=status,
+            result_content=result_content,
+            result_error_code=result_error_code,
+            resolved_at=resolved_at,
+        )
+        object.__setattr__(self, "result_content", result_content)
+        object.__setattr__(self, "result_error_code", result_error_code)
+        object.__setattr__(self, "resolved_at", resolved_at)
+        object.__setattr__(self, "decision_reason", decision_reason)
+
 
 def canonicalize_tool_arguments(arguments: Mapping[str, Any]) -> str:
     """返回 Tool arguments 的确定性 JSON 文本。"""
@@ -166,6 +195,9 @@ def transition_pending_action(
     new_status: PendingActionStatus,
     *,
     now: datetime | None = None,
+    result_content: str | None = None,
+    result_error_code: str | None = None,
+    decision_reason: str | None = None,
 ) -> PendingAction:
     """返回状态转换后的新 PendingAction。"""
 
@@ -176,7 +208,16 @@ def transition_pending_action(
             f"Cannot transition pending action from {action.status} to {status}"
         )
     updated_at = _require_aware_utc(now, "now") if now is not None else utc_now()
-    return replace(action, status=status, updated_at=updated_at)
+    resolved_at = updated_at if status in _TERMINAL_STATUSES else None
+    return replace(
+        action,
+        status=status,
+        updated_at=updated_at,
+        result_content=result_content,
+        result_error_code=result_error_code,
+        decision_reason=decision_reason,
+        resolved_at=resolved_at,
+    )
 
 
 def copy_pending_action(action: PendingAction) -> PendingAction:
@@ -196,6 +237,10 @@ def copy_pending_action(action: PendingAction) -> PendingAction:
         arguments_hash=action.arguments_hash,
         status=action.status,
         idempotency_key=action.idempotency_key,
+        result_content=action.result_content,
+        result_error_code=action.result_error_code,
+        resolved_at=action.resolved_at,
+        decision_reason=action.decision_reason,
         created_at=action.created_at,
         updated_at=action.updated_at,
         version=action.version,
@@ -230,6 +275,59 @@ def _to_json_value(value: Any) -> Any:
             raise ValueError("tool arguments must not contain NaN or Infinity")
         return value
     raise ValueError(f"tool arguments contain non-JSON value: {type(value).__name__}")
+
+
+def _normalize_result_content(value: str | None) -> str | None:
+    """校验并规范化内部保存的 Tool Result JSON。"""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    json.loads(text)
+    return text
+
+
+def _normalize_decision_reason(value: str | None) -> str | None:
+    """保存受控长度的内部拒绝原因，不进入公开摘要或 Tool Result。"""
+
+    if value is None:
+        return None
+    text = " ".join(str(value).strip().split())
+    return text[:200] or None
+
+
+def _validate_result_snapshot(
+    *,
+    status: PendingActionStatus,
+    result_content: str | None,
+    result_error_code: str | None,
+    resolved_at: datetime | None,
+) -> None:
+    """验证终态 Action 是否带有可幂等重放的 Tool Result。"""
+
+    if status == PendingActionStatus.EXECUTED:
+        if result_content is None:
+            raise ValueError("EXECUTED pending action must have result_content")
+        if result_error_code is not None:
+            raise ValueError("EXECUTED pending action must not have result_error_code")
+        if not _result_success(result_content):
+            raise ValueError("EXECUTED pending action result must be successful")
+    if status == PendingActionStatus.FAILED:
+        if result_content is None or result_error_code is None:
+            raise ValueError("FAILED pending action must have error result")
+        if _result_success(result_content):
+            raise ValueError("FAILED pending action result must not be successful")
+    if status in _TERMINAL_STATUSES and resolved_at is None:
+        raise ValueError("terminal pending action must have resolved_at")
+
+
+def _result_success(content: str) -> bool:
+    """读取 Tool Result JSON 的 success 字段。"""
+
+    payload = json.loads(content)
+    return bool(isinstance(payload, Mapping) and payload.get("success") is True)
 
 
 def _require_aware_utc(value: datetime, field_name: str) -> datetime:

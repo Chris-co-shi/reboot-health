@@ -5,7 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from agent.bootstrap import create_agent_core_from_env, create_generic_agent_loop_from_env
+from agent.bootstrap import (
+    create_agent_core_from_env,
+    create_generic_agent_loop_from_env,
+    create_generic_runtime_components_from_env,
+)
 from agent.models import ModelResponse, OpenAICompatibleProvider, ProviderConfigurationError
 from agent.runtime.core import AgentCore
 from agent.runtime.generic_loop import GenericAgentLoop
@@ -55,6 +59,33 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
         self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
         self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
         fake_client.chat.completions.create.assert_not_called()
+
+    def test_generic_runtime_components_share_stateful_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    components = create_generic_runtime_components_from_env(
+                        dotenv_path=missing_dotenv
+                    )
+
+        self.assertIs(components.loop.session_store, components.session_store)
+        self.assertIs(components.loop.pending_action_store, components.pending_action_store)
+        self.assertIs(
+            components.confirmation_coordinator.session_store,
+            components.session_store,
+        )
+        self.assertIs(
+            components.confirmation_coordinator.pending_action_store,
+            components.pending_action_store,
+        )
+        self.assertIs(
+            components.approved_action_executor.pending_action_store,
+            components.pending_action_store,
+        )
+        definitions = components.tool_registry.list()
+        self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
+        self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
 
     def test_generic_bootstrap_returns_independent_runtime_instances(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -11,6 +11,7 @@ from agent.runtime.pending_action import (
     canonicalize_tool_arguments,
     transition_pending_action,
 )
+from agent.tools.contract import error_content, success_content
 
 
 class PendingActionTest(unittest.TestCase):
@@ -103,9 +104,12 @@ class PendingActionTest(unittest.TestCase):
             executing,
             PendingActionStatus.EXECUTED,
             now=now + timedelta(seconds=2),
+            result_content=success_content({"ok": True}),
         )
 
         self.assertEqual(executed.status, PendingActionStatus.EXECUTED)
+        self.assertEqual(executed.result_content, success_content({"ok": True}))
+        self.assertIsNotNone(executed.resolved_at)
 
     def test_reject_and_expire_transitions_succeed_from_pending(self) -> None:
         action = _pending_action(action_id="action-r")
@@ -138,7 +142,12 @@ class PendingActionTest(unittest.TestCase):
             ),
             PendingActionStatus.EXECUTING,
         )
-        failed = transition_pending_action(executing, PendingActionStatus.FAILED)
+        failed = transition_pending_action(
+            executing,
+            PendingActionStatus.FAILED,
+            result_content=error_content("tool_execution_failed", "failed"),
+            result_error_code="tool_execution_failed",
+        )
         with self.assertRaises(PendingActionTransitionError):
             transition_pending_action(failed, PendingActionStatus.EXECUTED)
 
