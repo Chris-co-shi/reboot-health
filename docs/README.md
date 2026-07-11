@@ -18,7 +18,7 @@
 | 文档 | 唯一职责 |
 |---|---|
 | [`product-scope.md`](product-scope.md) | 产品定位、用户体验、范围与非目标 |
-| [`architecture.md`](architecture.md) | Python 模块化单体、Agent Runtime、Provider、Tool 与信任边界 |
+| [`architecture.md`](architecture.md) | Python 模块化单体、Agent Runtime、Provider、Tool、Session 与信任边界 |
 | [`domain-model.md`](domain-model.md) | 业务聚合、语义和需要迁移的不变量 |
 | [`api-db.md`](api-db.md) | 历史已实现 API/数据库合同与后续迁移参考 |
 | [`safety-rules.md`](safety-rules.md) | 健康与系统安全规则及待审核边界 |
@@ -33,21 +33,32 @@
 
 ```text
 ../README.md
+→ product-scope.md
 → architecture.md
 → mvp-exec-plan.md
 → decisions/0010-python-modular-monolith-and-agent-loop.md
+→ decisions/0011-session-context-memory-boundaries.md
 ```
 
-### 开始 Phase 2A 实现
+### 开始当前 Phase 2C 实现
 
 ```text
 ../AGENTS.md
 → ../health_agent/AGENTS.md
 → architecture.md
 → mvp-exec-plan.md
-→ implementation/phase-2a-read-only-tool-call-loop.md
+→ decisions/0011-session-context-memory-boundaries.md
+→ implementation/phase-2c-interactive-session-cli.md
 → ../health_agent/README.md
 ```
+
+### 回顾已完成 Phase 2A
+
+```text
+implementation/phase-2a-read-only-tool-call-loop.md
+```
+
+该文档是历史验收参考，不再代表当前待实施阶段。
 
 ### 迁移历史业务语义
 
@@ -66,11 +77,13 @@ architecture.md
 | Status | Meaning |
 |---|---|
 | `DONE` | 自动化验证和要求的真实运行验收均完成 |
+| `DONE_EXPLICIT` | 自动化验收完成，但能力需要显式启用或调用，尚非默认产品流程 |
 | `READY` | 设计、范围和验收标准已确认，可以开始实现 |
 | `IN_PROGRESS` | 正在实施 |
 | `IMPLEMENTED_WITH_BLOCKERS` | 主体存在，但仍有真实环境或关键验收阻塞 |
 | `TODO` | 尚未开始 |
 | `BLOCKED` | 被依赖或未确认事项阻塞 |
+| `OPTIONAL` | 不影响核心产品闭环的可选能力 |
 | `OPEN` | 用户尚未确认 |
 | `NEEDS_TECHNICAL_SPIKE` | 技术可行性待验证 |
 | `NEEDS_MEDICAL_REVIEW` | 医学规则缺少专业依据 |
