@@ -25,6 +25,7 @@
 | [0008](0008-m25a-flutter-agent-device-bootstrap.md) | Flutter、Runtime 与设备初始化 | 历史 | 旧多运行时技术骨架，不作为当前实施入口 |
 | [0009](0009-ai-first-product-and-module-boundaries.md) | Health Agent Harness 与 Java 领域内核 | 已替代 | 旧 Python/Java/Flutter 职责划分，由 0010 替代 |
 | [0010](0010-python-modular-monolith-and-agent-loop.md) | Python 模块化单体与通用 Agent Loop | 已确认 | Python 是当前与目标 Runtime；按有限轮次 Tool Call Loop 和纵向切片演进 |
+| [0011](0011-session-context-memory-boundaries.md) | Session、Context、Memory 与领域事实边界 | 已确认 | 连续对话、上下文摘要、领域事实和 Memory Candidate 分层管理 |
 
 ## Status rules
 
