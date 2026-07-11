@@ -10,83 +10,164 @@
 ../docs/architecture.md
 ../docs/mvp-exec-plan.md
 ../docs/decisions/0010-python-modular-monolith-and-agent-loop.md
+../docs/decisions/0011-session-context-memory-boundaries.md
 ```
 
-Phase 2A 的工程交接与验收参考：
+当前 Phase 2C 工程交接：
+
+```text
+../docs/implementation/phase-2c-interactive-session-cli.md
+```
+
+已完成 Phase 2A 验收参考：
 
 ```text
 ../docs/implementation/phase-2a-read-only-tool-call-loop.md
 ```
 
-未经用户明确要求，不在本目录任务中修复旧 Java/Python HTTP 链路，也不修改 Flutter、Vue 或 Compose。
+未经用户明确要求，不修复旧 Java/Python HTTP 链路，也不修改 Flutter、Vue 或 Compose。
 
 ## 当前阶段
 
 - Phase 1、1.1、1.2、1.3 已完成。
-- 产品运行 Provider 是真实 OpenAI-compatible `ModelProvider.complete_turn(...)`。
-- `INITIAL_PLANNING` 是已验证且已隔离的显式 legacy compatibility adapter。
+- 产品 Provider 是真实 OpenAI-compatible `ModelProvider.complete_turn(...)`。
+- `INITIAL_PLANNING` 是已验证且隔离的显式 legacy compatibility adapter。
 - Phase 2A 通用只读 Tool Call Agent Loop 已完成并经过真实 LLM Tool Call 验收。
-- Phase 2B Runtime 确认、恢复与 JSON 持久化基础已完成显式能力；默认产品入口仍使用内存 Store。
-- PostgreSQL、Redis、FastAPI、Memory、产品级 Safety Guard、Console/API Confirmation 入口、Plan Publish、多 Agent、MCP、消息队列和向量数据库尚未接入。
+- Phase 2B Runtime 状态、确认、恢复与 JSON 持久化安全基础已完成显式能力。
+- 默认 `agent.main` 和 `scripts/agent_console.py` 仍是 one-shot、内存 Store 入口。
+- 当前下一阶段是 Phase 2C Interactive Session & Conversation Context。
+- PostgreSQL、SQLite、Redis、FastAPI、健康领域 Repository、长期 Memory、产品级 Safety Guard、正式写操作和 Plan Publish 尚未接入。
 
-## Phase 2A 任务合同
+## Phase 2C 任务合同
 
 开始修改前必须声明：
 
 ```text
 Primary Module:
-  health_agent 通用 Agent Runtime 与只读 Tool Call Loop
+  health_agent 交互式 Session CLI 与现有 Runtime Store 组装
 
 Allowed Paths:
-  agent/runtime/
-  agent/models/
-  agent/tools/
+  scripts/agent_chat.py
   agent/bootstrap.py
-  agent/main.py
-  scripts/agent_console.py
-  prompts/
+  agent/main.py（仅共享展示/错误辅助的最小调整）
+  agent/runtime/（仅修复 Phase 2C 验收暴露的通用 Session 问题）
   tests/
   README.md
   AGENTS.md
-
-Conditional Compatibility Path:
-  agent/skills/initial_planning.py
-  只允许为隔离兼容入口做最小修改。
+  ../README.md
+  ../docs/mvp-exec-plan.md
+  ../docs/architecture.md
+  ../docs/implementation/phase-2c-interactive-session-cli.md
 
 Forbidden Paths:
   ../backend/
   ../clients/flutter/
   ../frontend/
-  ../deploy/docker-compose.yml
+  ../deploy/
 
 Out of Scope:
-  FastAPI、数据库、Memory、Safety Guard、Confirmation、Plan Publish、
-  DailyRecord、写操作 Tool、多 Agent、Subagent、DAG、工作流引擎、消息队列。
+  FastAPI
+  数据库、Redis、消息队列
+  健康领域 Repository
+  UserProfile/HealthConstraint/Plan 持久化
+  长期 Memory 自动提取
+  Safety Guard
+  正式写操作 Tool
+  Plan Publish
+  多 Agent/Sub-Agent/DAG
 ```
 
 ## Runtime 边界
 
-Agent Runtime 只负责：
+Agent Runtime 负责：
 
 - 通用请求归一化。
 - Runtime Environment。
-- Message History。
+- Session Message History。
 - Model Turn。
 - Tool Call Loop。
 - 最大模型回合和最大 Tool Call 数。
 - 整体超时。
 - 错误收敛。
 - RunTrace。
-- Session/Confirmation 协议边界、运行租约、checkpoint 和恢复分类。
+- Session/Confirmation 协议。
+- lease、heartbeat、fence、checkpoint 和 recovery classification。
 
 Runtime 不得包含：
 
 - 训练规则。
 - 血压、疼痛、饮食或医学判断。
 - Program、Phase、WeeklyPlan、TodayAction。
-- 数据库访问。
+- 健康领域数据库访问。
 - 用户健康事实硬编码。
-- 写操作执行、业务确认决策或发布策略。
+- 把 Conversation Summary 写成领域事实。
+- 自动长期 Memory。
+- 正式业务写入和发布策略。
+
+## Phase 2C 实现规则
+
+### 复用 Runtime Components
+
+交互式 CLI 必须只创建一次：
+
+```python
+components = create_generic_runtime_components_from_env(...)
+```
+
+输入循环必须复用同一组：
+
+- `loop`。
+- `session_store`。
+- `pending_action_store`。
+- `confirmation_coordinator`。
+
+不得每轮输入重新组装 Provider、Registry 或 Store。
+
+### Session ID
+
+- 每个交互式 CLI 维护当前 `session_id`。
+- 普通用户输入使用同一 `session_id` 调用 `loop.run(...)`。
+- `/new` 创建新 Session，不覆盖旧 Session。
+- `/resume <session-id>` 只切换到已存在 Session。
+- Session 不存在时不得调用模型。
+
+### Storage
+
+允许：
+
+```text
+memory
+json
+```
+
+- 默认使用 memory。
+- json 必须显式提供目录。
+- 不读取环境变量隐式启用磁盘 Store。
+- JSON 明文风险必须在 CLI/README 中明确提示。
+
+### Clarification 与 Confirmation
+
+```text
+Clarification：普通下一轮 user message
+Proposal：未执行候选
+Confirmation：高影响 Tool、写入或发布审批
+```
+
+普通澄清问题不得创建 PendingAction，也不得把用户随后的自然语言视为隐式 approve。
+
+### CLI 命令
+
+首版必须支持：
+
+```text
+/help
+/new
+/status
+/resume <session-id>
+/exit
+```
+
+未知命令不得发送给模型。
 
 ## ModelProvider 边界
 
@@ -111,7 +192,7 @@ Provider 不得：
 
 ## Message Contract
 
-Phase 2A 必须支持：
+必须支持：
 
 ```text
 system
@@ -125,31 +206,21 @@ tool
 - assistant 可携带一个或多个 `tool_calls`。
 - tool 消息必须关联对应 `tool_call_id`。
 - Tool Result 不得伪装成 user 消息。
-- 同一 assistant 回合的所有 Tool Result 追加后，才能进入下一次 Model Turn。
+- 同一 assistant 回合的 Tool Result 全部追加后才能进入下一次 Model Turn。
+- 同一 Session 的新 user message 必须追加在已有消息历史之后。
 
 ## Tool Runtime 边界
 
-### ToolRegistry
+ToolRegistry 只负责白名单、唯一性、查找和模型可见定义。
 
-只负责：
-
-- 白名单注册。
-- 工具名称非空和唯一性校验。
-- 按名称查找。
-- 输出模型可见 name、description 和 input schema。
-
-不得执行 Tool，不得暴露 handler、Python 路径或内部类名。
-
-### ToolExecutor
-
-只负责：
+ToolExecutor 只负责：
 
 - 查找注册工具。
-- 校验 READ_ONLY 权限和无副作用边界。
+- 校验权限和副作用。
 - 校验 arguments。
 - 调用 handler。
 - 输出合法 JSON Tool Result。
-- 将 unknown_tool、invalid_arguments、tool_execution_failed、invalid_tool_result 返回模型。
+- 将 unknown_tool、invalid_arguments、tool_execution_failed 和 invalid_tool_result 返回模型。
 
 不得：
 
@@ -159,51 +230,31 @@ tool
 - 自动重试失败 Tool。
 - 把失败结果伪装成成功。
 
-### Phase 2A 工具权限
+当前正式产品 Tool 仍只允许 READ_ONLY 或纯计算能力。
 
-只允许：
-
-```text
-READ_ONLY
-```
-
-如果现有枚举名为 `READ`，只能表达无持久化副作用的查询或纯计算。
-
-不得注册：
+## Session、Context、Memory 边界
 
 ```text
-WRITE
-LOW_RISK_WRITE
-CONFIRMATION_REQUIRED
-PROPOSAL
-PUBLISH
-FORBIDDEN
+Session Message History：连续对话技术状态
+Runtime Context：当前模型输入
+Conversation Summary：上下文压缩
+Domain Facts：结构化健康事实
+Memory Candidate：模型推断候选
 ```
 
-首个正式产品 Tool 是 `convert_weight_unit`，只支持 kg、lb、jin 的确定性换算，不做 BMI、医学或训练判断。
+规则：
 
-## Runtime Environment
-
-通用 Context 只保留：
-
-```text
-runtimeEnvironment.currentDate
-runtimeEnvironment.currentDateTime
-runtimeEnvironment.timezone
-runtimeEnvironment.locale
-```
-
-不再向通用 Runtime 暴露独立 `today`。`INITIAL_PLANNING` 如需要，只能在兼容适配器内部派生。
-
-时间必须可注入，以便测试不依赖机器当前时间。
+- Conversation Summary 不得成为 UserProfile、HealthConstraint 或 Goal。
+- 重要健康事实必须由后续领域服务和确认边界管理。
+- Memory Candidate 确认前不得生效。
+- Session 删除不得隐式删除领域事实。
 
 ## INITIAL_PLANNING 兼容层
 
 - 只能作为显式 legacy 入口保留。
 - 普通用户请求不得默认通过 trigger 进入该 Skill。
-- 通用 AgentLoop 不得导入 PlanningOutput、Program、Phase 或 WeeklyPlan。
+- GenericAgentLoop 不得导入 PlanningOutput、Program、Phase 或 WeeklyPlan。
 - 兼容层不得反向要求通用 Runtime 使用固定 Planning 工作流。
-- 本阶段不删除 Planning 业务结构，也不借机重写计划逻辑。
 
 ## Bootstrap
 
@@ -215,19 +266,34 @@ LLMSettings
 → ToolRegistry
 → 注册内置只读工具
 → ToolExecutor
-→ AgentLoop
-→ AgentCore / 产品入口
+→ Session/PendingAction Store
+→ GenericAgentLoop
+→ ConfirmationCoordinator
 ```
 
 Bootstrap 不得导入 `tests/`、ScriptedModelProvider、MockProvider、Fake Tool 或 Smoke Tool。
 
 ## 测试规则
 
-- 普通 unittest 不允许调用真实模型、网络、数据库或外部服务。
-- ScriptedModelProvider 只能位于 `tests/support/`。
-- 测试替身不得包含健康计划业务逻辑。
-- Phase 2A 必须覆盖直接回答、单 Tool Call、多 Tool Call、未知工具、参数非法、Tool 异常、非法 Tool 结果、空响应、最大模型回合、最大工具次数和消息顺序。
-- 真实 LLM 验收必须确认原生 Tool Call、role=tool Result、至少两次模型回合和不经过 `INITIAL_PLANNING`。
+普通 unittest 不允许调用真实模型、网络、数据库或外部服务。
+
+Phase 2C 必须覆盖：
+
+- 两轮输入使用同一 Session。
+- 第二轮模型消息包含第一轮 user/assistant。
+- `/new` 隔离消息历史。
+- `/resume` 恢复已有 Session。
+- JSON 模式重建 Runtime 后恢复 Session。
+- 未知命令不发送给模型。
+- one-shot main/console 不回归。
+- 现有 Tool Call、lease、checkpoint、recovery 和 orphan 测试继续通过。
+
+真实 LLM 验收必须确认：
+
+- 第二轮回答记得第一轮用户目标。
+- JSON 模式跨进程恢复。
+- 未虚构用户档案或历史记录。
+- 未经过 `INITIAL_PLANNING`。
 
 ## 日志与 Trace
 
@@ -244,42 +310,17 @@ RunTrace 可以记录：
 禁止记录：
 
 - 完整健康原文。
-- 完整 prompt。
+- 完整 Prompt。
 - raw model response。
-- API key、Authorization header 或令牌。
+- API Key、Authorization header 或令牌。
 - 对用户或模型暴露的 Python traceback。
 
 ## 禁止
 
-- 不开放 shell Tool、任意文件系统 Tool 或任意 SQL Tool。
-- 不连接 PostgreSQL、SQLite 或 Redis。
-- 不新增其他模型供应商框架。
-- 不实现写操作、Safety Guard、Confirmation、Plan Publish 或 Memory 半成品。
+- 不开放 shell、任意文件系统或任意 SQL Tool。
+- 不连接健康领域数据库。
+- 不新增模型供应商框架。
+- 不实现写操作、Safety Guard、Plan Publish 或长期 Memory 半成品。
 - 不通过普通文本解析伪 Tool Call。
-- 不新增多 Agent、Subagent、DAG 或工作流引擎。
+- 不新增多 Agent、Sub-Agent、DAG 或工作流引擎。
 - 不为了测试通过而删除测试、放宽断言、绕过校验或降低规则。
-- 不记录真实健康资料、密钥、令牌或认证信息。
-
-## 验证命令
-
-```bash
-cd health_agent
-python3 -m compileall agent tests
-python3 -m unittest discover -s tests -v
-
-git diff --check
-```
-
-产品路径替身检查：
-
-```bash
-rg "MockProvider|ScriptedModelProvider" agent scripts
-```
-
-任意执行能力检查：
-
-```bash
-rg "eval\\(|exec\\(|subprocess|os\\.system" agent/tools agent/runtime
-```
-
-真实验收输入与完整 Definition of Done 见 Phase 2A 实施规范。
