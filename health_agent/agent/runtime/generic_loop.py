@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,10 @@ from agent.runtime.session import (
     SessionRunLeaseExpiredError,
     SessionStoreError,
     SessionVersionConflictError,
+)
+from agent.runtime.stale_recovery import (
+    StaleRecoveryClassification,
+    StaleSessionInspection,
 )
 from agent.runtime.trace import TraceRecorder
 from agent.tools.contract import ToolExecutionResult, error_content
@@ -455,6 +460,120 @@ class GenericAgentLoop:
             current_assistant_message_index=continuation.assistant_message_index,
             next_tool_call_index=continuation.next_tool_call_index,
             current_originating_run_id=continuation.originating_run_id,
+            ownership=ownership,
+        )
+        return self._drive_session(
+            trace=trace,
+            state=state,
+            provider_name=provider_name,
+            is_resume=True,
+        )
+
+    def inspect_stale_session(self, session_id: str) -> StaleSessionInspection:
+        """只读检查 stale RUNNING Session 是否可安全恢复。"""
+
+        requested_session_id = str(session_id or "").strip()
+        if not requested_session_id:
+            return StaleSessionInspection(
+                session_id="missing-session",
+                classification=StaleRecoveryClassification.NOT_ELIGIBLE,
+            )
+        try:
+            session = self.session_store.get(requested_session_id)
+        except SessionStoreError:
+            return StaleSessionInspection(
+                session_id=requested_session_id,
+                classification=StaleRecoveryClassification.CHECKPOINT_CORRUPTED,
+            )
+        return self._classify_stale_session(session, requested_session_id)
+
+    def recover_stale_session(self, session_id: str) -> AgentRunResult:
+        """从 stale RUNNING + DRIVE_READY checkpoint 安全恢复执行。
+
+        Recovery 不接受新的用户输入、Tool arguments、confirmed/bypass 参数；只有
+        已持久化且无 in-flight 外部调用的 DRIVE_READY checkpoint 才会自动继续。
+        """
+
+        requested_session_id = str(session_id or "").strip()
+        started = self.monotonic_provider()
+        provider_name = str(getattr(self.provider, "provider_name", "unknown"))
+        trace = self.trace_recorder.start(
+            session_id=requested_session_id or "missing-session",
+            trigger_type=GENERIC_TRIGGER_TYPE,
+            provider=provider_name,
+        )
+        self.trace_recorder.record_step(
+            trace,
+            "stale_recovery_started",
+            {"provider": provider_name, "modelTurns": 0, "toolCallCount": 0},
+        )
+
+        try:
+            session = self.session_store.get(requested_session_id)
+        except SessionStoreError:
+            return self._session_error_result(
+                trace=trace,
+                session_id=requested_session_id or "missing-session",
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=(),
+                error_code=ERROR_SESSION_RECOVERY_CHECKPOINT_CORRUPTED,
+                message="Session recovery checkpoint could not be read",
+                release_session=False,
+            )
+
+        inspection = self._classify_stale_session(session, requested_session_id)
+        if session is None:
+            return self._session_error_result(
+                trace=trace,
+                session_id=requested_session_id or "missing-session",
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=(),
+                error_code=ERROR_SESSION_RECOVERY_NOT_ELIGIBLE,
+                message="Session is not eligible for stale recovery",
+                release_session=False,
+            )
+        if inspection.classification != StaleRecoveryClassification.SAFE_RESUME:
+            return self._stale_recovery_error_result(
+                trace=trace,
+                session=session,
+                started=started,
+                classification=inspection.classification,
+            )
+
+        claimed_or_error = self._claim_stale_session_for_recovery(
+            trace=trace,
+            session=session,
+            started=started,
+        )
+        if isinstance(claimed_or_error, AgentRunResult):
+            return claimed_or_error
+        session, ownership, checkpoint = claimed_or_error
+        self.trace_recorder.record_step(
+            trace,
+            "run_abandoned",
+            {
+                "checkpointPhase": checkpoint.checkpoint_phase.name,
+                "oldRunHash": _safe_run_hash(checkpoint.originating_run_id),
+                "oldGeneration": checkpoint.run_fence_generation,
+                "newGeneration": ownership.fence_generation,
+                "recoveryReason": "lease_expired_drive_ready",
+            },
+        )
+        state = _DriveState(
+            session=session,
+            model_turns=checkpoint.model_turns_used,
+            tool_calls=checkpoint.tool_calls_used,
+            started=started,
+            active_deadline=started + checkpoint.remaining_runtime_seconds,
+            started_at=checkpoint.started_at,
+            deadline_at=checkpoint.deadline_at,
+            current_assistant_message_index=checkpoint.assistant_message_index,
+            next_tool_call_index=checkpoint.next_tool_call_index,
+            current_originating_run_id=trace.run_id,
             ownership=ownership,
         )
         return self._drive_session(
@@ -1165,6 +1284,172 @@ class GenericAgentLoop:
                 message="Session could not be claimed for execution",
                 release_session=False,
             )
+
+    def _claim_stale_session_for_recovery(
+        self,
+        *,
+        trace,
+        session: AgentSession,
+        started: float,
+    ) -> tuple[AgentSession, RunOwnership, RunExecutionCheckpoint] | AgentRunResult:
+        """用新 generation 接管 stale RUNNING Session；不追加用户消息。"""
+
+        checkpoint = session.execution_checkpoint
+        if (
+            checkpoint is None
+            or checkpoint.checkpoint_phase != RunExecutionCheckpointPhase.DRIVE_READY
+        ):
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=0,
+                tool_calls=0,
+                messages=tuple(session.messages),
+                error_code=ERROR_SESSION_RECOVERY_NOT_ELIGIBLE,
+                message="Session is not eligible for stale recovery",
+                release_session=False,
+            )
+
+        now = self._utc_now()
+        generation = session.run_fence_generation + 1
+        ownership = RunOwnership(
+            session_id=session.session_id,
+            run_id=trace.run_id,
+            fence_generation=generation,
+        )
+        recovered_checkpoint = replace(
+            checkpoint,
+            originating_run_id=trace.run_id,
+            run_fence_generation=generation,
+            updated_at=now,
+        )
+        recovered = replace(
+            session,
+            status=AgentSessionStatus.RUNNING,
+            active_run_id=trace.run_id,
+            run_fence_generation=generation,
+            active_run_last_heartbeat_at=now,
+            active_run_lease_expires_at=now + timedelta(seconds=self.run_lease_ttl_seconds),
+            execution_checkpoint=recovered_checkpoint,
+        )
+        try:
+            saved = self.session_store.save(recovered, expected_version=session.version)
+            return saved, ownership, recovered_checkpoint
+        except SessionVersionConflictError:
+            latest = self.session_store.get(session.session_id)
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=checkpoint.model_turns_used,
+                tool_calls=checkpoint.tool_calls_used,
+                messages=tuple(latest.messages if latest is not None else session.messages),
+                error_code=ERROR_SESSION_RECOVERY_NOT_ELIGIBLE,
+                message="Session recovery claim lost the race",
+                release_session=False,
+            )
+        except SessionStoreError as exc:
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=checkpoint.model_turns_used,
+                tool_calls=checkpoint.tool_calls_used,
+                messages=tuple(session.messages),
+                error_code=_session_error_code(exc),
+                message="Session could not be claimed for stale recovery",
+                release_session=False,
+            )
+
+    def _classify_stale_session(
+        self,
+        session: AgentSession | None,
+        requested_session_id: str,
+    ) -> StaleSessionInspection:
+        """按 stale recovery 规则对 Session 做只读分类。"""
+
+        inspection_session_id = requested_session_id or "missing-session"
+        if session is None:
+            return StaleSessionInspection(
+                session_id=inspection_session_id,
+                classification=StaleRecoveryClassification.NOT_ELIGIBLE,
+            )
+        if session.status != AgentSessionStatus.RUNNING:
+            return StaleSessionInspection(
+                session_id=session.session_id,
+                classification=StaleRecoveryClassification.NOT_ELIGIBLE,
+            )
+        if not self._session_lease_expired(session, self._utc_now()):
+            return StaleSessionInspection(
+                session_id=session.session_id,
+                classification=StaleRecoveryClassification.NOT_ELIGIBLE,
+            )
+        checkpoint = session.execution_checkpoint
+        if checkpoint is None:
+            return StaleSessionInspection(
+                session_id=session.session_id,
+                classification=StaleRecoveryClassification.NOT_ELIGIBLE,
+            )
+        if checkpoint.checkpoint_phase == RunExecutionCheckpointPhase.DRIVE_READY:
+            classification = StaleRecoveryClassification.SAFE_RESUME
+        elif checkpoint.checkpoint_phase == RunExecutionCheckpointPhase.MODEL_CALL_IN_FLIGHT:
+            classification = StaleRecoveryClassification.MODEL_STATE_UNKNOWN
+        elif checkpoint.checkpoint_phase == RunExecutionCheckpointPhase.TOOL_CALL_IN_FLIGHT:
+            classification = StaleRecoveryClassification.TOOL_STATE_UNKNOWN
+        elif checkpoint.checkpoint_phase == RunExecutionCheckpointPhase.FINALIZING:
+            classification = StaleRecoveryClassification.FINALIZATION_STATE_UNKNOWN
+        else:  # pragma: no cover - enum validation prevents this branch.
+            classification = StaleRecoveryClassification.CHECKPOINT_CORRUPTED
+        return StaleSessionInspection(
+            session_id=session.session_id,
+            classification=classification,
+            checkpoint_phase=checkpoint.checkpoint_phase.name,
+        )
+
+    def _stale_recovery_error_result(
+        self,
+        *,
+        trace,
+        session: AgentSession,
+        started: float,
+        classification: StaleRecoveryClassification,
+    ) -> AgentRunResult:
+        """把 recovery 分类转换为稳定公开错误码。"""
+
+        error_code = ERROR_SESSION_RECOVERY_NOT_ELIGIBLE
+        message = "Session is not eligible for stale recovery"
+        if classification == StaleRecoveryClassification.MODEL_STATE_UNKNOWN:
+            error_code = ERROR_SESSION_RECOVERY_MODEL_STATE_UNKNOWN
+            message = "Session recovery cannot safely repeat an in-flight model call"
+        elif classification == StaleRecoveryClassification.TOOL_STATE_UNKNOWN:
+            error_code = ERROR_SESSION_RECOVERY_TOOL_STATE_UNKNOWN
+            message = "Session recovery cannot safely repeat an in-flight tool call"
+        elif classification == StaleRecoveryClassification.FINALIZATION_STATE_UNKNOWN:
+            error_code = ERROR_SESSION_FINALIZATION_STATE_UNKNOWN
+            message = "Session finalization state could not be confirmed for recovery"
+        elif classification == StaleRecoveryClassification.CHECKPOINT_CORRUPTED:
+            error_code = ERROR_SESSION_RECOVERY_CHECKPOINT_CORRUPTED
+            message = "Session recovery checkpoint is corrupted"
+        return self._session_error_result(
+            trace=trace,
+            session_id=session.session_id,
+            started=started,
+            model_turns=(
+                session.execution_checkpoint.model_turns_used
+                if session.execution_checkpoint is not None
+                else 0
+            ),
+            tool_calls=(
+                session.execution_checkpoint.tool_calls_used
+                if session.execution_checkpoint is not None
+                else 0
+            ),
+            messages=tuple(session.messages),
+            error_code=error_code,
+            message=message,
+            release_session=False,
+        )
 
     def _validate_resume_continuation(
         self,
@@ -2422,6 +2707,13 @@ def _positive_or_zero(value: float, field_name: str) -> float:
     if number < 0:
         raise ValueError(f"{field_name} must be non-negative")
     return number
+
+
+def _safe_run_hash(run_id: str) -> str:
+    """返回 run id 的短 hash，避免在 trace 中记录完整 owner。"""
+
+    normalized = str(run_id or "").strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def _policy_denied_result(

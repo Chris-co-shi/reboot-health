@@ -36,6 +36,11 @@ TRACE_STEP_ALLOWED_FIELDS = {
     "toolName",
     "success",
     "limitType",
+    "checkpointPhase",
+    "oldRunHash",
+    "oldGeneration",
+    "newGeneration",
+    "recoveryReason",
 }
 
 
