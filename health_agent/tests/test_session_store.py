@@ -23,12 +23,40 @@ class AgentSessionTest(unittest.TestCase):
         self.assertIsNone(session.pending_action_id)
         self.assertIsNone(session.continuation)
         self.assertIsNone(session.active_run_id)
+        self.assertEqual(session.run_fence_generation, 0)
+        self.assertIsNone(session.active_run_last_heartbeat_at)
+        self.assertIsNone(session.active_run_lease_expires_at)
         self.assertEqual(session.created_at.tzinfo, timezone.utc)
 
     def test_session_normalizes_active_run_id(self) -> None:
-        session = AgentSession(session_id="session-1", active_run_id=" run-1 ")
+        heartbeat_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        session = AgentSession(
+            session_id="session-1",
+            status=AgentSessionStatus.RUNNING,
+            active_run_id=" run-1 ",
+            run_fence_generation=1,
+            active_run_last_heartbeat_at=heartbeat_at,
+            active_run_lease_expires_at=heartbeat_at + timedelta(seconds=60),
+        )
 
         self.assertEqual(session.active_run_id, "run-1")
+        self.assertEqual(session.run_fence_generation, 1)
+
+    def test_non_running_session_rejects_active_owner_fields(self) -> None:
+        with self.assertRaises(ValueError):
+            AgentSession(session_id="session-1", active_run_id="run-1")
+
+    def test_running_session_requires_valid_lease(self) -> None:
+        heartbeat_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        with self.assertRaises(ValueError):
+            AgentSession(
+                session_id="session-1",
+                status=AgentSessionStatus.RUNNING,
+                active_run_id="run-1",
+                run_fence_generation=1,
+                active_run_last_heartbeat_at=heartbeat_at,
+                active_run_lease_expires_at=heartbeat_at,
+            )
 
     def test_session_saves_complete_message_order(self) -> None:
         messages = [

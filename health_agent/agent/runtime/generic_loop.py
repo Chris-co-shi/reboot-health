@@ -21,10 +21,13 @@ from agent.runtime.pending_action_store import (
     PendingActionStoreError,
 )
 from agent.runtime.result import AgentRunError, AgentRunResult, PendingActionSummary
+from agent.runtime.run_ownership import RunOwnership
 from agent.runtime.session import (
     AgentSession,
     AgentSessionStatus,
     InMemorySessionStore,
+    SessionRunFenceLostError,
+    SessionRunLeaseExpiredError,
     SessionStoreError,
     SessionVersionConflictError,
 )
@@ -57,9 +60,14 @@ ERROR_SESSION_MESSAGE_HISTORY_INVALID = "SESSION_MESSAGE_HISTORY_INVALID"
 ERROR_SESSION_FINALIZATION_PERSIST_FAILED = "SESSION_FINALIZATION_PERSIST_FAILED"
 ERROR_SESSION_FINALIZATION_STATE_UNKNOWN = "SESSION_FINALIZATION_STATE_UNKNOWN"
 ERROR_SESSION_OWNERSHIP_LOST = "SESSION_OWNERSHIP_LOST"
+ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY = "SESSION_STALE_RUN_REQUIRES_RECOVERY"
+ERROR_SESSION_RUN_LEASE_EXPIRED = "SESSION_RUN_LEASE_EXPIRED"
+ERROR_SESSION_RUN_FENCE_LOST = "SESSION_RUN_FENCE_LOST"
 ERROR_PENDING_ACTION_CREATE_FAILED = "PENDING_ACTION_CREATE_FAILED"
 TOOL_POLICY_DENIED = "tool_policy_denied"
 DEFAULT_CONFIRMATION_TTL_SECONDS = 15 * 60
+DEFAULT_RUN_LEASE_SAFETY_MARGIN_SECONDS = 5.0
+DEFAULT_RUN_LEASE_EXTRA_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +134,7 @@ class _DriveState:
     next_tool_call_index: int = 0
     current_originating_run_id: str | None = None
     finish_reason: str | None = None
+    ownership: RunOwnership | None = None
 
 
 class GenericAgentLoop:
@@ -146,11 +155,24 @@ class GenericAgentLoop:
         confirmation_ttl_seconds: float = DEFAULT_CONFIRMATION_TTL_SECONDS,
         action_id_factory: Callable[[], str] | None = None,
         monotonic_provider: Callable[[], float] | None = None,
+        run_lease_ttl_seconds: float | None = None,
+        run_lease_heartbeat_interval_seconds: float | None = None,
+        lease_safety_margin_seconds: float = DEFAULT_RUN_LEASE_SAFETY_MARGIN_SECONDS,
     ) -> None:
         if confirmation_ttl_seconds <= 0:
             raise ValueError("confirmation_ttl_seconds must be positive")
         self.provider = provider
         self.limits = limits or GenericLoopLimits()
+        self.lease_safety_margin_seconds = _positive_or_zero(
+            lease_safety_margin_seconds,
+            "lease_safety_margin_seconds",
+        )
+        self.run_lease_ttl_seconds = self._resolve_run_lease_ttl(run_lease_ttl_seconds)
+        self.run_lease_heartbeat_interval_seconds = (
+            self._resolve_run_lease_heartbeat_interval(
+                run_lease_heartbeat_interval_seconds
+            )
+        )
         self.session_store = session_store or InMemorySessionStore()
         self.trace_recorder = trace_recorder or TraceRecorder()
         self.now_provider = now_provider
@@ -162,6 +184,46 @@ class GenericAgentLoop:
         self.confirmation_ttl_seconds = float(confirmation_ttl_seconds)
         self.action_id_factory = action_id_factory or _default_action_id
         self.monotonic_provider = monotonic_provider or time.monotonic
+
+    def _resolve_run_lease_ttl(self, configured: float | None) -> float:
+        """解析并校验 RUNNING lease TTL。
+
+        Lease 使用 wall clock，而 active runtime timeout 使用 monotonic clock；TTL
+        必须覆盖整个主动执行预算加安全边距，避免正常运行在预算内失租。
+        """
+
+        if configured is None:
+            value = (
+                self.limits.timeout_seconds
+                + self.lease_safety_margin_seconds
+                + DEFAULT_RUN_LEASE_EXTRA_SECONDS
+            )
+        else:
+            value = float(configured)
+        if value <= 0:
+            raise ValueError("run_lease_ttl_seconds must be positive")
+        if value <= self.limits.timeout_seconds + self.lease_safety_margin_seconds:
+            raise ValueError(
+                "run_lease_ttl_seconds must be greater than timeout_seconds "
+                "plus lease_safety_margin_seconds"
+            )
+        return value
+
+    def _resolve_run_lease_heartbeat_interval(self, configured: float | None) -> float:
+        """解析 heartbeat interval；本 Slice 不启动后台线程，只用于合同配置。"""
+
+        value = (
+            min(10.0, self.run_lease_ttl_seconds / 2.0)
+            if configured is None
+            else float(configured)
+        )
+        if value <= 0:
+            raise ValueError("run_lease_heartbeat_interval_seconds must be positive")
+        if value >= self.run_lease_ttl_seconds:
+            raise ValueError(
+                "run_lease_heartbeat_interval_seconds must be less than run_lease_ttl_seconds"
+            )
+        return value
 
     def run(self, request: AgentRequest) -> AgentRunResult:
         """执行一次有限模型回合循环。"""
@@ -211,7 +273,7 @@ class GenericAgentLoop:
         )
         if isinstance(claimed_or_error, AgentRunResult):
             return claimed_or_error
-        session = claimed_or_error
+        session, ownership = claimed_or_error
 
         runtime_environment = build_runtime_environment(
             now=wall_clock_started if self.now_provider else None,
@@ -222,6 +284,7 @@ class GenericAgentLoop:
                 session=session,
                 request=request,
                 runtime_environment_payload=runtime_environment.to_provider_payload(),
+                ownership=ownership,
             )
         except SessionStoreError as exc:
             return self._session_error_result(
@@ -250,6 +313,7 @@ class GenericAgentLoop:
             started_at=started_at,
             deadline_at=deadline_at,
             current_originating_run_id=trace.run_id,
+            ownership=ownership,
         )
         return self._drive_session(
             trace=trace,
@@ -295,6 +359,11 @@ class GenericAgentLoop:
             )
 
         if session.status == AgentSessionStatus.RUNNING:
+            error_code = (
+                ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                if self._session_lease_expired(session, self._utc_now())
+                else ERROR_SESSION_ALREADY_RUNNING
+            )
             return self._session_error_result(
                 trace=trace,
                 session_id=session.session_id,
@@ -302,8 +371,12 @@ class GenericAgentLoop:
                 model_turns=0,
                 tool_calls=0,
                 messages=tuple(session.messages),
-                error_code=ERROR_SESSION_ALREADY_RUNNING,
-                message="Session is already running",
+                error_code=error_code,
+                message=(
+                    "Session has a stale run that requires recovery"
+                    if error_code == ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                    else "Session is already running"
+                ),
                 release_session=False,
             )
         if session.status == AgentSessionStatus.WAITING_CONFIRMATION:
@@ -361,7 +434,7 @@ class GenericAgentLoop:
         )
         if isinstance(claimed_or_error, AgentRunResult):
             return claimed_or_error
-        session = claimed_or_error
+        session, ownership = claimed_or_error
 
         state = _DriveState(
             session=session,
@@ -374,6 +447,7 @@ class GenericAgentLoop:
             current_assistant_message_index=continuation.assistant_message_index,
             next_tool_call_index=continuation.next_tool_call_index,
             current_originating_run_id=continuation.originating_run_id,
+            ownership=ownership,
         )
         return self._drive_session(
             trace=trace,
@@ -397,6 +471,13 @@ class GenericAgentLoop:
         """
 
         tool_definitions = self.tool_registry.to_model_definitions()
+        heartbeat_error = self._heartbeat_state_or_result(
+            trace=trace,
+            state=state,
+            message="Session ownership heartbeat failed before drive loop",
+        )
+        if heartbeat_error is not None:
+            return heartbeat_error
 
         while True:
             if state.current_assistant_message_index is not None:
@@ -446,6 +527,13 @@ class GenericAgentLoop:
                     "provider": provider_name,
                 },
             )
+            heartbeat_error = self._heartbeat_state_or_result(
+                trace=trace,
+                state=state,
+                message="Session ownership heartbeat failed before model call",
+            )
+            if heartbeat_error is not None:
+                return heartbeat_error
             try:
                 response = self.provider.complete_turn(
                     messages=tuple(state.session.messages),
@@ -456,6 +544,7 @@ class GenericAgentLoop:
                 finalized = self._finalize_owned_session(
                     trace=trace,
                     session=state.session,
+                    ownership=_require_ownership(state.ownership),
                     target_status=AgentSessionStatus.FAILED,
                     started=state.started,
                     model_turns=state.model_turns,
@@ -487,6 +576,13 @@ class GenericAgentLoop:
                     error=AgentRunError(code=ERROR_MODEL_ERROR, message=exc.safe_summary),
                 )
 
+            heartbeat_error = self._heartbeat_state_or_result(
+                trace=trace,
+                state=state,
+                message="Session ownership heartbeat failed after model call",
+            )
+            if heartbeat_error is not None:
+                return heartbeat_error
             assistant_message_index = len(state.session.messages)
             assistant_message = (
                 ModelMessage(
@@ -496,7 +592,11 @@ class GenericAgentLoop:
                 )
             )
             try:
-                state.session = self._append_and_save(state.session, assistant_message)
+                state.session = self._append_and_save(
+                    state.session,
+                    assistant_message,
+                    state.ownership,
+                )
             except SessionStoreError as exc:
                 return self._session_error_result(
                     trace=trace,
@@ -560,6 +660,7 @@ class GenericAgentLoop:
                 finalized = self._finalize_owned_session(
                     trace=trace,
                     session=state.session,
+                    ownership=_require_ownership(state.ownership),
                     target_status=AgentSessionStatus.FAILED,
                     started=state.started,
                     model_turns=state.model_turns,
@@ -598,6 +699,7 @@ class GenericAgentLoop:
             finalized = self._finalize_owned_session(
                 trace=trace,
                 session=state.session,
+                ownership=_require_ownership(state.ownership),
                 target_status=AgentSessionStatus.COMPLETED,
                 started=state.started,
                 model_turns=state.model_turns,
@@ -636,6 +738,7 @@ class GenericAgentLoop:
         session: AgentSession,
         request: AgentRequest,
         runtime_environment_payload: Mapping[str, str],
+        ownership: RunOwnership,
     ) -> AgentSession:
         """把新的用户回合写入 Session，并用 CAS 保存。
 
@@ -650,7 +753,7 @@ class GenericAgentLoop:
         if not session.messages:
             session.messages.append(self._system_message(runtime_environment_payload))
         session.messages.append(ModelMessage(role="user", content=request.user_text))
-        return self.session_store.save(session, expected_version=session.version)
+        return self._save_owned_session(session, ownership)
 
     def _system_message(
         self,
@@ -673,11 +776,125 @@ class GenericAgentLoop:
         self,
         session: AgentSession,
         message: ModelMessage,
+        ownership: RunOwnership | None,
     ) -> AgentSession:
         """追加一条消息并按当前 version CAS 保存。"""
 
         session.messages.append(message)
-        return self.session_store.save(session, expected_version=session.version)
+        return self._save_owned_session(session, _require_ownership(ownership))
+
+    def _save_owned_session(
+        self,
+        session: AgentSession,
+        ownership: RunOwnership,
+    ) -> AgentSession:
+        """在保存前重新校验 Store 中的 owner、generation 和 lease。
+
+        该方法是当前 run 写入 Session 的统一 fence。它先读取磁盘/Store 当前状态，
+        再使用 expected_version CAS 保存，避免旧 generation 或过期 owner 覆盖新
+        owner。普通 get 不调用模型或工具，因此不违反锁内外部调用边界。
+        """
+
+        current = self._assert_current_owner(ownership)
+        if self._session_lease_expired(current, self._utc_now()):
+            raise SessionRunLeaseExpiredError("Session run lease expired")
+        try:
+            return self.session_store.save(session, expected_version=session.version)
+        except SessionVersionConflictError:
+            current = self._assert_current_owner(ownership)
+            if self._session_lease_expired(current, self._utc_now()):
+                raise SessionRunLeaseExpiredError("Session run lease expired")
+            raise
+
+    def _heartbeat_state_or_result(
+        self,
+        *,
+        trace,
+        state: _DriveState,
+        message: str,
+    ) -> AgentRunResult | None:
+        """为当前 state 做一次 owner heartbeat；失败时转换为稳定运行错误。"""
+
+        try:
+            state.session = self._heartbeat_owned_session(
+                _require_ownership(state.ownership)
+            )
+            return None
+        except SessionRunLeaseExpiredError:
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=state.finish_reason,
+                messages=tuple(state.session.messages),
+                error_code=ERROR_SESSION_RUN_LEASE_EXPIRED,
+                message=message,
+                release_session=False,
+            )
+        except SessionRunFenceLostError:
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=state.finish_reason,
+                messages=tuple(state.session.messages),
+                error_code=ERROR_SESSION_RUN_FENCE_LOST,
+                message=message,
+                release_session=False,
+            )
+        except SessionStoreError as exc:
+            return self._session_error_result(
+                trace=trace,
+                session_id=state.session.session_id,
+                started=state.started,
+                model_turns=state.model_turns,
+                tool_calls=state.tool_calls,
+                finish_reason=state.finish_reason,
+                messages=tuple(state.session.messages),
+                error_code=_session_error_code(exc),
+                message=message,
+                release_session=False,
+            )
+
+    def _heartbeat_owned_session(self, ownership: RunOwnership) -> AgentSession:
+        """续租当前 owner；过期或 fence 变化时拒绝复活旧 owner。"""
+
+        current = self._assert_current_owner(ownership)
+        now = self._utc_now()
+        if self._session_lease_expired(current, now):
+            raise SessionRunLeaseExpiredError("Session run lease expired")
+        refreshed = replace(
+            current,
+            active_run_last_heartbeat_at=now,
+            active_run_lease_expires_at=now + timedelta(seconds=self.run_lease_ttl_seconds),
+        )
+        try:
+            return self.session_store.save(refreshed, expected_version=current.version)
+        except SessionVersionConflictError:
+            self._assert_current_owner(ownership)
+            raise
+
+    def _assert_current_owner(self, ownership: RunOwnership) -> AgentSession:
+        current = self.session_store.get(ownership.session_id)
+        if (
+            current is None
+            or current.status != AgentSessionStatus.RUNNING
+            or current.active_run_id != ownership.run_id
+            or current.run_fence_generation != ownership.fence_generation
+        ):
+            raise SessionRunFenceLostError("Session run fence lost")
+        return current
+
+    def _session_lease_expired(self, session: AgentSession, now: datetime) -> bool:
+        """判断 RUNNING lease 是否已过期；无 lease 元数据按 stale 处理。"""
+
+        if session.active_run_lease_expires_at is None:
+            return True
+        return _require_aware_utc(now) >= session.active_run_lease_expires_at
 
     def _claim_session(
         self,
@@ -687,20 +904,67 @@ class GenericAgentLoop:
         started: float,
         model_turns: int,
         tool_calls: int,
-    ) -> AgentSession | AgentRunResult:
+    ) -> tuple[AgentSession, RunOwnership] | AgentRunResult:
         """把 ACTIVE/COMPLETED Session 原子切换为 RUNNING。
 
         只有 CAS 成功后才允许调用模型或工具。CAS 失败时会重新读取当前 Session，
         如果已被其它 run 占用，则返回稳定的 `SESSION_ALREADY_RUNNING`。
         """
 
+        now = self._utc_now()
+        if session.status == AgentSessionStatus.RUNNING:
+            error_code = (
+                ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                if self._session_lease_expired(session, now)
+                else ERROR_SESSION_ALREADY_RUNNING
+            )
+            message = (
+                "Session has a stale run that requires recovery"
+                if error_code == ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                else "Session is already running"
+            )
+            return self._session_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=error_code,
+                message=message,
+                release_session=False,
+            )
+
+        generation = session.run_fence_generation + 1
         session.status = AgentSessionStatus.RUNNING
         session.active_run_id = trace.run_id
+        session.run_fence_generation = generation
+        session.active_run_last_heartbeat_at = now
+        session.active_run_lease_expires_at = now + timedelta(
+            seconds=self.run_lease_ttl_seconds
+        )
+        ownership = RunOwnership(
+            session_id=session.session_id,
+            run_id=trace.run_id,
+            fence_generation=generation,
+        )
         try:
-            return self.session_store.save(session, expected_version=session.version)
+            saved = self.session_store.save(session, expected_version=session.version)
+            return saved, ownership
         except SessionVersionConflictError:
             latest = self.session_store.get(session.session_id)
             if latest is not None and latest.status == AgentSessionStatus.RUNNING:
+                latest_now = self._utc_now()
+                error_code = (
+                    ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                    if self._session_lease_expired(latest, latest_now)
+                    else ERROR_SESSION_ALREADY_RUNNING
+                )
+                message = (
+                    "Session has a stale run that requires recovery"
+                    if error_code == ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                    else "Session is already running"
+                )
                 return self._session_error_result(
                     trace=trace,
                     session_id=session.session_id,
@@ -708,8 +972,8 @@ class GenericAgentLoop:
                     model_turns=model_turns,
                     tool_calls=tool_calls,
                     messages=tuple(latest.messages),
-                    error_code=ERROR_SESSION_ALREADY_RUNNING,
-                    message="Session is already running",
+                    error_code=error_code,
+                    message=message,
                     release_session=False,
                 )
             return self._session_error_result(
@@ -997,6 +1261,13 @@ class GenericAgentLoop:
                 },
             )
 
+            heartbeat_error = self._heartbeat_state_or_result(
+                trace=trace,
+                state=state,
+                message="Session ownership heartbeat failed before tool preflight",
+            )
+            if heartbeat_error is not None:
+                return heartbeat_error
             preflight = self.tool_executor.preflight(tool_call)
             if preflight.error_result is not None:
                 result = preflight.error_result
@@ -1022,9 +1293,24 @@ class GenericAgentLoop:
                             0.0,
                             state.active_deadline - self.monotonic_provider(),
                         ),
+                        ownership=_require_ownership(state.ownership),
                     )
                 if decision.disposition == ToolDisposition.EXECUTE_NOW:
+                    heartbeat_error = self._heartbeat_state_or_result(
+                        trace=trace,
+                        state=state,
+                        message="Session ownership heartbeat failed before tool execution",
+                    )
+                    if heartbeat_error is not None:
+                        return heartbeat_error
                     result = self.tool_executor.execute_prepared(prepared_call)
+                    heartbeat_error = self._heartbeat_state_or_result(
+                        trace=trace,
+                        state=state,
+                        message="Session ownership heartbeat failed after tool execution",
+                    )
+                    if heartbeat_error is not None:
+                        return heartbeat_error
                 else:
                     result = _policy_denied_result(
                         tool_call_id=prepared_call.tool_call_id,
@@ -1103,9 +1389,9 @@ class GenericAgentLoop:
             return None
         state.session.continuation = None
         try:
-            state.session = self.session_store.save(
+            state.session = self._save_owned_session(
                 state.session,
-                expected_version=state.session.version,
+                _require_ownership(state.ownership),
             )
         except SessionStoreError as exc:
             return self._session_error_result(
@@ -1140,7 +1426,10 @@ class GenericAgentLoop:
                     state.active_deadline - self.monotonic_provider(),
                 ),
             )
-        return self.session_store.save(state.session, expected_version=state.session.version)
+        return self._save_owned_session(
+            state.session,
+            _require_ownership(state.ownership),
+        )
 
     def _existing_waiting_confirmation_result(
         self,
@@ -1213,6 +1502,11 @@ class GenericAgentLoop:
         """确认当前 Session 可以进入新的模型回合。"""
 
         if session.status == AgentSessionStatus.RUNNING:
+            error_code = (
+                ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                if self._session_lease_expired(session, self._utc_now())
+                else ERROR_SESSION_ALREADY_RUNNING
+            )
             return self._session_error_result(
                 trace=trace,
                 session_id=session.session_id,
@@ -1220,8 +1514,12 @@ class GenericAgentLoop:
                 model_turns=0,
                 tool_calls=0,
                 messages=tuple(session.messages),
-                error_code=ERROR_SESSION_ALREADY_RUNNING,
-                message="Session is already running",
+                error_code=error_code,
+                message=(
+                    "Session has a stale run that requires recovery"
+                    if error_code == ERROR_SESSION_STALE_RUN_REQUIRES_RECOVERY
+                    else "Session is already running"
+                ),
                 release_session=False,
             )
         if session.status not in (AgentSessionStatus.ACTIVE, AgentSessionStatus.COMPLETED):
@@ -1262,6 +1560,7 @@ class GenericAgentLoop:
         deadline_at: datetime,
         originating_run_id: str,
         remaining_runtime_seconds: float,
+        ownership: RunOwnership,
     ) -> AgentRunResult:
         """创建 PendingAction 并把 Session 切换到 WAITING_CONFIRMATION。
 
@@ -1315,6 +1614,7 @@ class GenericAgentLoop:
         finalized = self._finalize_owned_session(
             trace=trace,
             session=session,
+            ownership=ownership,
             target_status=AgentSessionStatus.WAITING_CONFIRMATION,
             started=started,
             model_turns=model_turns,
@@ -1397,6 +1697,7 @@ class GenericAgentLoop:
         finish_reason: str | None = None,
         session: AgentSession | None = None,
         release_session: bool = True,
+        ownership: RunOwnership | None = None,
     ) -> AgentRunResult:
         """构造会话一致性错误结果，统一 fail closed。"""
 
@@ -1404,6 +1705,7 @@ class GenericAgentLoop:
             finalized = self._finalize_owned_session(
                 trace=trace,
                 session=session,
+                ownership=ownership or _ownership_from_session(session),
                 target_status=AgentSessionStatus.FAILED,
                 started=started,
                 model_turns=model_turns,
@@ -1442,6 +1744,7 @@ class GenericAgentLoop:
         *,
         trace,
         session: AgentSession,
+        ownership: RunOwnership,
         target_status: AgentSessionStatus,
         started: float,
         model_turns: int,
@@ -1456,7 +1759,10 @@ class GenericAgentLoop:
         认的情况都返回稳定 finalization 错误，避免把未持久化的完成态伪装成成功。
         """
 
-        if session.active_run_id != trace.run_id:
+        if (
+            session.active_run_id != ownership.run_id
+            or session.run_fence_generation != ownership.fence_generation
+        ):
             return self._finalization_error_result(
                 trace=trace,
                 session_id=session.session_id,
@@ -1464,7 +1770,7 @@ class GenericAgentLoop:
                 model_turns=model_turns,
                 tool_calls=tool_calls,
                 messages=tuple(session.messages),
-                error_code=ERROR_SESSION_OWNERSHIP_LOST,
+                error_code=ERROR_SESSION_RUN_FENCE_LOST,
                 message="The agent run could not finalize because session ownership changed.",
                 finish_reason=finish_reason,
             )
@@ -1472,15 +1778,30 @@ class GenericAgentLoop:
         expected_version = session.version
         session.status = target_status
         session.active_run_id = None
+        session.active_run_last_heartbeat_at = None
+        session.active_run_lease_expires_at = None
         if target_status != AgentSessionStatus.WAITING_CONFIRMATION:
             session.pending_action_id = None
             session.continuation = None
         try:
-            return self.session_store.save(session, expected_version=session.version)
+            return self._save_owned_session(session, ownership)
+        except (SessionRunFenceLostError, SessionRunLeaseExpiredError) as exc:
+            return self._finalization_error_result(
+                trace=trace,
+                session_id=session.session_id,
+                started=started,
+                model_turns=model_turns,
+                tool_calls=tool_calls,
+                messages=tuple(session.messages),
+                error_code=_session_error_code(exc),
+                message="The agent run could not finalize because session ownership changed.",
+                finish_reason=finish_reason,
+            )
         except SessionStoreError:
             return self._reconcile_finalization_failure(
                 trace=trace,
                 expected_session=session,
+                ownership=ownership,
                 expected_version=expected_version,
                 target_status=target_status,
                 started=started,
@@ -1494,6 +1815,7 @@ class GenericAgentLoop:
         *,
         trace,
         expected_session: AgentSession,
+        ownership: RunOwnership,
         expected_version: int,
         target_status: AgentSessionStatus,
         started: float,
@@ -1545,12 +1867,16 @@ class GenericAgentLoop:
         if _session_matches_finalized_target(
             stored=stored,
             expected=expected_session,
+            ownership=ownership,
             expected_version=expected_version,
             target_status=target_status,
         ):
             return stored
 
-        if stored.active_run_id == trace.run_id:
+        if (
+            stored.active_run_id == ownership.run_id
+            and stored.run_fence_generation == ownership.fence_generation
+        ):
             return self._finalization_error_result(
                 trace=trace,
                 session_id=expected_session.session_id,
@@ -1684,6 +2010,7 @@ class GenericAgentLoop:
         finalized = self._finalize_owned_session(
             trace=trace,
             session=session,
+            ownership=_ownership_from_session(session),
             target_status=AgentSessionStatus.FAILED,
             started=started,
             model_turns=model_turns,
@@ -1808,6 +2135,7 @@ def _session_matches_finalized_target(
     *,
     stored: AgentSession,
     expected: AgentSession,
+    ownership: RunOwnership,
     expected_version: int,
     target_status: AgentSessionStatus,
 ) -> bool:
@@ -1821,11 +2149,40 @@ def _session_matches_finalized_target(
     return (
         stored.status == target_status
         and stored.active_run_id is None
+        and stored.active_run_last_heartbeat_at is None
+        and stored.active_run_lease_expires_at is None
+        and stored.run_fence_generation == ownership.fence_generation
         and stored.pending_action_id == expected.pending_action_id
         and stored.continuation == expected.continuation
         and stored.messages == expected.messages
         and stored.version > expected_version
     )
+
+
+def _ownership_from_session(session: AgentSession) -> RunOwnership:
+    """从 RUNNING session 派生当前 ownership；不用于公开返回。"""
+
+    return RunOwnership(
+        session_id=session.session_id,
+        run_id=session.active_run_id or "",
+        fence_generation=session.run_fence_generation,
+    )
+
+
+def _require_ownership(ownership: RunOwnership | None) -> RunOwnership:
+    if ownership is None:
+        raise SessionRunFenceLostError("Session run ownership is missing")
+    return ownership
+
+
+def _positive_or_zero(value: float, field_name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be non-negative") from exc
+    if number < 0:
+        raise ValueError(f"{field_name} must be non-negative")
+    return number
 
 
 def _policy_denied_result(
@@ -1862,6 +2219,10 @@ def _pending_action_summary(action: PendingAction) -> PendingActionSummary:
 def _session_error_code(exc: SessionStoreError) -> str:
     """把 SessionStore 异常收敛为稳定错误码。"""
 
+    if isinstance(exc, SessionRunFenceLostError):
+        return ERROR_SESSION_RUN_FENCE_LOST
+    if isinstance(exc, SessionRunLeaseExpiredError):
+        return ERROR_SESSION_RUN_LEASE_EXPIRED
     if isinstance(exc, SessionVersionConflictError):
         return ERROR_SESSION_VERSION_CONFLICT
     return ERROR_SESSION_STATE_CONFLICT

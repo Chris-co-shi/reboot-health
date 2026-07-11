@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -228,6 +228,9 @@ class JsonStoreRestartTest(unittest.TestCase):
                     session_id="session-1",
                     status=AgentSessionStatus.RUNNING,
                     active_run_id="run-in-flight",
+                    run_fence_generation=1,
+                    active_run_last_heartbeat_at=_fixed_now(),
+                    active_run_lease_expires_at=_fixed_now() + timedelta(seconds=60),
                 )
             )
 

@@ -46,6 +46,9 @@ class AgentSession:
     pending_action_id: str | None = None
     continuation: AgentContinuation | None = None
     active_run_id: str | None = None
+    run_fence_generation: int = 0
+    active_run_last_heartbeat_at: datetime | None = None
+    active_run_lease_expires_at: datetime | None = None
     version: int = 0
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -68,6 +71,34 @@ class AgentSession:
         if self.active_run_id is not None:
             active_run_id = str(self.active_run_id or "").strip()
             self.active_run_id = active_run_id or None
+        if not isinstance(self.run_fence_generation, int) or self.run_fence_generation < 0:
+            raise ValueError("run_fence_generation must be a non-negative integer")
+        self.active_run_last_heartbeat_at = _optional_aware_utc(
+            self.active_run_last_heartbeat_at,
+            "active_run_last_heartbeat_at",
+        )
+        self.active_run_lease_expires_at = _optional_aware_utc(
+            self.active_run_lease_expires_at,
+            "active_run_lease_expires_at",
+        )
+        if self.status == AgentSessionStatus.RUNNING:
+            if not self.active_run_id:
+                raise ValueError("RUNNING session must have active_run_id")
+            if self.run_fence_generation <= 0:
+                raise ValueError("RUNNING session must have positive run_fence_generation")
+            if self.active_run_last_heartbeat_at is None:
+                raise ValueError("RUNNING session must have active_run_last_heartbeat_at")
+            if self.active_run_lease_expires_at is None:
+                raise ValueError("RUNNING session must have active_run_lease_expires_at")
+            if self.active_run_lease_expires_at <= self.active_run_last_heartbeat_at:
+                raise ValueError("RUNNING session lease must expire after heartbeat")
+        else:
+            if self.active_run_id is not None:
+                raise ValueError("non-RUNNING session must not have active_run_id")
+            if self.active_run_last_heartbeat_at is not None:
+                raise ValueError("non-RUNNING session must not have active_run_last_heartbeat_at")
+            if self.active_run_lease_expires_at is not None:
+                raise ValueError("non-RUNNING session must not have active_run_lease_expires_at")
         if not isinstance(self.version, int) or self.version < 0:
             raise ValueError("version must be a non-negative integer")
         if not isinstance(self.turns, int) or self.turns < 0:
@@ -95,6 +126,14 @@ class SessionNotFoundError(SessionStoreError):
 
 class SessionVersionConflictError(SessionStoreError):
     """Session version 与 expected_version 不一致。"""
+
+
+class SessionRunFenceLostError(SessionStoreError):
+    """当前 Run 已失去 active_run_id 或 fence generation ownership。"""
+
+
+class SessionRunLeaseExpiredError(SessionStoreError):
+    """当前 Run 的 Session lease 已过期，旧 owner 不得继续写入。"""
 
 
 class SessionStore(Protocol):
@@ -196,6 +235,9 @@ def copy_session(session: AgentSession) -> AgentSession:
         pending_action_id=session.pending_action_id,
         continuation=session.continuation,
         active_run_id=session.active_run_id,
+        run_fence_generation=session.run_fence_generation,
+        active_run_last_heartbeat_at=session.active_run_last_heartbeat_at,
+        active_run_lease_expires_at=session.active_run_lease_expires_at,
         version=session.version,
         created_at=session.created_at,
         updated_at=session.updated_at,
@@ -255,3 +297,9 @@ def _require_aware_utc(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _optional_aware_utc(value: datetime | None, field_name: str) -> datetime | None:
+    if value is None:
+        return None
+    return _require_aware_utc(value, field_name)

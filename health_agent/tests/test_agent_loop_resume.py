@@ -566,6 +566,15 @@ def _active_resumable_session(
         messages=messages,
         pending_action_id=pending_action_id,
         active_run_id=active_run_id,
+        run_fence_generation=1 if status == AgentSessionStatus.RUNNING else 0,
+        active_run_last_heartbeat_at=(
+            started_at if status == AgentSessionStatus.RUNNING else None
+        ),
+        active_run_lease_expires_at=(
+            started_at + timedelta(seconds=60)
+            if status == AgentSessionStatus.RUNNING
+            else None
+        ),
         continuation=AgentContinuation(
             originating_run_id="run-original",
             assistant_message_index=assistant_message_index,

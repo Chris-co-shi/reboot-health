@@ -18,7 +18,9 @@ from agent.runtime.storage.errors import (
 )
 from agent.runtime.storage.file_lock import entity_lock
 from agent.runtime.storage.json_codec import (
+    PENDING_ACTION_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    SESSION_SCHEMA_VERSION,
     SESSION_ENTITY_TYPE,
     PENDING_ACTION_ENTITY_TYPE,
     pending_action_from_payload,
@@ -56,7 +58,9 @@ __all__ = [
     "JsonSessionStoreIOError",
     "JsonSessionStoreUnsupportedSchema",
     "PENDING_ACTION_ENTITY_TYPE",
+    "PENDING_ACTION_SCHEMA_VERSION",
     "SCHEMA_VERSION",
+    "SESSION_SCHEMA_VERSION",
     "SESSION_ENTITY_TYPE",
     "atomic_write_text",
     "ensure_private_directory",

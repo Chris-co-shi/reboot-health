@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
 
 from agent.models import ModelMessage, ModelToolCall
@@ -22,7 +22,9 @@ from agent.runtime.storage.errors import (
     JsonStoreUnsupportedSchema,
 )
 
-SCHEMA_VERSION = 1
+SESSION_SCHEMA_VERSION = 2
+PENDING_ACTION_SCHEMA_VERSION = 1
+SCHEMA_VERSION = SESSION_SCHEMA_VERSION
 SESSION_ENTITY_TYPE = "agent_session"
 PENDING_ACTION_ENTITY_TYPE = "pending_action"
 
@@ -43,7 +45,7 @@ def session_to_payload(session: AgentSession) -> dict[str, Any]:
     """把 AgentSession 转成带 schema wrapper 的稳定 JSON object。"""
 
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": SESSION_SCHEMA_VERSION,
         "entity_type": SESSION_ENTITY_TYPE,
         "data": {
             "session_id": session.session_id,
@@ -56,6 +58,17 @@ def session_to_payload(session: AgentSession) -> dict[str, Any]:
                 else None
             ),
             "active_run_id": session.active_run_id,
+            "run_fence_generation": session.run_fence_generation,
+            "active_run_last_heartbeat_at": (
+                _datetime_to_json(session.active_run_last_heartbeat_at)
+                if session.active_run_last_heartbeat_at is not None
+                else None
+            ),
+            "active_run_lease_expires_at": (
+                _datetime_to_json(session.active_run_lease_expires_at)
+                if session.active_run_lease_expires_at is not None
+                else None
+            ),
             "version": session.version,
             "created_at": _datetime_to_json(session.created_at),
             "updated_at": _datetime_to_json(session.updated_at),
@@ -75,33 +88,60 @@ def session_from_payload(
 ) -> AgentSession:
     """从 JSON payload 恢复 AgentSession，并执行严格合同校验。"""
 
-    data = _unwrap_payload(payload, entity_type=SESSION_ENTITY_TYPE)
-    _require_fields(
-        data,
-        {
-            "session_id",
-            "status",
-            "messages",
-            "pending_action_id",
-            "continuation",
-            "active_run_id",
-            "version",
-            "created_at",
-            "updated_at",
-            "current_skill",
-            "turns",
-            "pending_confirmations",
-            "context_summary",
-            "locale",
-        },
+    data, schema_version = _unwrap_payload(
+        payload,
+        entity_type=SESSION_ENTITY_TYPE,
+        supported_versions={1, SESSION_SCHEMA_VERSION},
     )
+    required_fields = {
+        "session_id",
+        "status",
+        "messages",
+        "pending_action_id",
+        "continuation",
+        "active_run_id",
+        "version",
+        "created_at",
+        "updated_at",
+        "current_skill",
+        "turns",
+        "pending_confirmations",
+        "context_summary",
+        "locale",
+    }
+    if schema_version >= 2:
+        required_fields.update(
+            {
+                "run_fence_generation",
+                "active_run_last_heartbeat_at",
+                "active_run_lease_expires_at",
+            }
+        )
+    _require_fields(data, required_fields)
     session_id = _require_non_empty_string(data["session_id"], "session_id")
     if expected_session_id is not None and session_id != expected_session_id:
         raise JsonStoreDataCorrupted("Session id does not match requested id")
     try:
+        status = AgentSessionStatus(_require_non_empty_string(data["status"], "status"))
+        run_fence_generation = _session_run_fence_generation_from_json(
+            data,
+            schema_version=schema_version,
+            status=status,
+        )
+        heartbeat_at = _session_heartbeat_from_json(
+            data,
+            schema_version=schema_version,
+            status=status,
+        )
+        lease_expires_at = _session_lease_expires_from_json(
+            data,
+            schema_version=schema_version,
+            status=status,
+            heartbeat_at=heartbeat_at,
+        )
         return AgentSession(
             session_id=session_id,
-            status=AgentSessionStatus(_require_non_empty_string(data["status"], "status")),
+            status=status,
             messages=_messages_from_json(data["messages"]),
             pending_action_id=_optional_string(data["pending_action_id"], "pending_action_id"),
             continuation=(
@@ -110,6 +150,9 @@ def session_from_payload(
                 else None
             ),
             active_run_id=_optional_string(data["active_run_id"], "active_run_id"),
+            run_fence_generation=run_fence_generation,
+            active_run_last_heartbeat_at=heartbeat_at,
+            active_run_lease_expires_at=lease_expires_at,
             version=_non_negative_int(data["version"], "version"),
             created_at=_datetime_from_json(data["created_at"], "created_at"),
             updated_at=_datetime_from_json(data["updated_at"], "updated_at"),
@@ -130,7 +173,7 @@ def pending_action_to_payload(action: PendingAction) -> dict[str, Any]:
     """把 PendingAction 转成带 schema wrapper 的稳定 JSON object。"""
 
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": PENDING_ACTION_SCHEMA_VERSION,
         "entity_type": PENDING_ACTION_ENTITY_TYPE,
         "data": {
             "action_id": action.action_id,
@@ -168,7 +211,11 @@ def pending_action_from_payload(
 ) -> PendingAction:
     """从 JSON payload 恢复 PendingAction，并校验 arguments_hash 未被篡改。"""
 
-    data = _unwrap_payload(payload, entity_type=PENDING_ACTION_ENTITY_TYPE)
+    data, _ = _unwrap_payload(
+        payload,
+        entity_type=PENDING_ACTION_ENTITY_TYPE,
+        supported_versions={PENDING_ACTION_SCHEMA_VERSION},
+    )
     _require_fields(
         data,
         {
@@ -264,18 +311,76 @@ def loads_payload(text: str) -> Mapping[str, Any]:
     return payload
 
 
-def _unwrap_payload(payload: Mapping[str, Any], *, entity_type: str) -> Mapping[str, Any]:
+def _session_run_fence_generation_from_json(
+    data: Mapping[str, Any],
+    *,
+    schema_version: int,
+    status: AgentSessionStatus,
+) -> int:
+    if schema_version >= 2:
+        return _non_negative_int(data["run_fence_generation"], "run_fence_generation")
+    return 1 if status == AgentSessionStatus.RUNNING else 0
+
+
+def _session_heartbeat_from_json(
+    data: Mapping[str, Any],
+    *,
+    schema_version: int,
+    status: AgentSessionStatus,
+) -> datetime | None:
+    if schema_version >= 2:
+        value = data["active_run_last_heartbeat_at"]
+        return (
+            _datetime_from_json(value, "active_run_last_heartbeat_at")
+            if value is not None
+            else None
+        )
+    if status != AgentSessionStatus.RUNNING:
+        return None
+    updated_at = _datetime_from_json(data["updated_at"], "updated_at")
+    return updated_at - timedelta(microseconds=1)
+
+
+def _session_lease_expires_from_json(
+    data: Mapping[str, Any],
+    *,
+    schema_version: int,
+    status: AgentSessionStatus,
+    heartbeat_at: datetime | None,
+) -> datetime | None:
+    if schema_version >= 2:
+        value = data["active_run_lease_expires_at"]
+        return (
+            _datetime_from_json(value, "active_run_lease_expires_at")
+            if value is not None
+            else None
+        )
+    if status != AgentSessionStatus.RUNNING:
+        return None
+    updated_at = _datetime_from_json(data["updated_at"], "updated_at")
+    if heartbeat_at is not None and updated_at <= heartbeat_at:
+        return heartbeat_at + timedelta(microseconds=1)
+    return updated_at
+
+
+def _unwrap_payload(
+    payload: Mapping[str, Any],
+    *,
+    entity_type: str,
+    supported_versions: set[int],
+) -> tuple[Mapping[str, Any], int]:
     if not isinstance(payload, Mapping):
         raise JsonStoreDataCorrupted("Store payload must be an object")
     _require_fields(payload, {"schema_version", "entity_type", "data"})
-    if payload["schema_version"] != SCHEMA_VERSION:
+    schema_version = _non_negative_int(payload["schema_version"], "schema_version")
+    if schema_version not in supported_versions:
         raise JsonStoreUnsupportedSchema("Store schema_version is not supported")
     if payload["entity_type"] != entity_type:
         raise JsonStoreDataCorrupted("Store entity_type does not match")
     data = payload["data"]
     if not isinstance(data, Mapping):
         raise JsonStoreDataCorrupted("Store data must be an object")
-    return data
+    return data, schema_version
 
 
 def _message_to_json(message: ModelMessage) -> dict[str, Any]:

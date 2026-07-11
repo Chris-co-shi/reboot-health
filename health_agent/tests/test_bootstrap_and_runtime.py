@@ -88,6 +88,22 @@ class BootstrapAndRuntimeTest(unittest.TestCase):
         self.assertEqual([definition.name for definition in definitions], [CONVERT_WEIGHT_UNIT_TOOL_NAME])
         self.assertEqual(definitions[0].permission, ToolPermission.READ_ONLY)
 
+    def test_generic_runtime_components_forward_run_lease_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing_dotenv = Path(directory) / ".env"
+            with patch.dict(os.environ, _llm_env(), clear=True):
+                with patch("agent.models.openai_compatible.OpenAI", return_value=Mock()):
+                    components = create_generic_runtime_components_from_env(
+                        dotenv_path=missing_dotenv,
+                        run_lease_ttl_seconds=120,
+                        run_lease_heartbeat_interval_seconds=12,
+                        lease_safety_margin_seconds=2,
+                    )
+
+        self.assertEqual(components.loop.run_lease_ttl_seconds, 120)
+        self.assertEqual(components.loop.run_lease_heartbeat_interval_seconds, 12)
+        self.assertEqual(components.loop.lease_safety_margin_seconds, 2)
+
     def test_generic_runtime_components_can_use_explicit_json_stores(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             missing_dotenv = Path(directory) / ".env"

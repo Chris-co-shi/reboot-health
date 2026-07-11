@@ -52,12 +52,18 @@ def create_generic_agent_loop_from_env(
     *,
     storage_mode: str = "memory",
     storage_directory: Path | str | None = None,
+    run_lease_ttl_seconds: float | None = None,
+    run_lease_heartbeat_interval_seconds: float | None = None,
+    lease_safety_margin_seconds: float = 5.0,
 ) -> GenericAgentLoop:
     """创建默认产品 GenericAgentLoop，并注册正式只读内置工具。"""
     return create_generic_runtime_components_from_env(
         dotenv_path=dotenv_path,
         storage_mode=storage_mode,
         storage_directory=storage_directory,
+        run_lease_ttl_seconds=run_lease_ttl_seconds,
+        run_lease_heartbeat_interval_seconds=run_lease_heartbeat_interval_seconds,
+        lease_safety_margin_seconds=lease_safety_margin_seconds,
     ).loop
 
 
@@ -66,6 +72,9 @@ def create_generic_runtime_components_from_env(
     *,
     storage_mode: str = "memory",
     storage_directory: Path | str | None = None,
+    run_lease_ttl_seconds: float | None = None,
+    run_lease_heartbeat_interval_seconds: float | None = None,
+    lease_safety_margin_seconds: float = 5.0,
 ) -> GenericRuntimeComponents:
     """创建共享 Store/Registry 的 Generic Runtime 组件。
 
@@ -92,6 +101,9 @@ def create_generic_runtime_components_from_env(
         tool_registry=registry,
         tool_executor=executor,
         pending_action_store=pending_action_store,
+        run_lease_ttl_seconds=run_lease_ttl_seconds,
+        run_lease_heartbeat_interval_seconds=run_lease_heartbeat_interval_seconds,
+        lease_safety_margin_seconds=lease_safety_margin_seconds,
     )
     coordinator = ConfirmationCoordinator(
         session_store=session_store,

@@ -40,6 +40,10 @@ class JsonCodecSessionTest(unittest.TestCase):
         self.assertEqual(loaded.session_id, session.session_id)
         self.assertEqual(loaded.status, AgentSessionStatus.WAITING_CONFIRMATION)
         self.assertEqual(loaded.version, 7)
+        self.assertEqual(loaded.run_fence_generation, 0)
+        self.assertIsNone(loaded.active_run_id)
+        self.assertIsNone(loaded.active_run_last_heartbeat_at)
+        self.assertIsNone(loaded.active_run_lease_expires_at)
         self.assertEqual(loaded.created_at, session.created_at)
         self.assertEqual(loaded.updated_at, session.updated_at)
         self.assertEqual(loaded.continuation.next_tool_call_index, 1)
@@ -80,6 +84,11 @@ class JsonCodecSessionTest(unittest.TestCase):
         with self.assertRaises(JsonStoreDataCorrupted):
             session_from_payload(payload)
 
+        payload = session_to_payload(_running_session())
+        payload["data"]["active_run_lease_expires_at"] = payload["data"]["active_run_last_heartbeat_at"]
+        with self.assertRaises(JsonStoreDataCorrupted):
+            session_from_payload(payload)
+
     def test_session_payload_rejects_id_mismatch_and_bad_message_shape(self) -> None:
         with self.assertRaises(JsonStoreDataCorrupted):
             session_from_payload(
@@ -91,6 +100,47 @@ class JsonCodecSessionTest(unittest.TestCase):
         payload["data"]["messages"][3]["tool_call_id"] = None
         with self.assertRaises(JsonStoreDataCorrupted):
             session_from_payload(payload)
+
+    def test_running_session_round_trip_preserves_lease_fields(self) -> None:
+        session = _running_session()
+
+        loaded = session_from_payload(session_to_payload(session))
+
+        self.assertEqual(loaded.status, AgentSessionStatus.RUNNING)
+        self.assertEqual(loaded.active_run_id, "run-active")
+        self.assertEqual(loaded.run_fence_generation, 3)
+        self.assertEqual(loaded.active_run_last_heartbeat_at, _fixed_time())
+        self.assertEqual(
+            loaded.active_run_lease_expires_at,
+            _fixed_time() + timedelta(seconds=90),
+        )
+
+    def test_v1_session_payload_is_migrated_without_rewriting_schema(self) -> None:
+        payload = session_to_payload(_session())
+        payload["schema_version"] = 1
+        del payload["data"]["run_fence_generation"]
+        del payload["data"]["active_run_last_heartbeat_at"]
+        del payload["data"]["active_run_lease_expires_at"]
+
+        loaded = session_from_payload(payload)
+
+        self.assertEqual(loaded.status, AgentSessionStatus.WAITING_CONFIRMATION)
+        self.assertEqual(loaded.run_fence_generation, 0)
+        self.assertIsNone(loaded.active_run_id)
+
+    def test_v1_running_session_payload_is_migrated_as_stale(self) -> None:
+        payload = session_to_payload(_running_session())
+        payload["schema_version"] = 1
+        del payload["data"]["run_fence_generation"]
+        del payload["data"]["active_run_last_heartbeat_at"]
+        del payload["data"]["active_run_lease_expires_at"]
+
+        loaded = session_from_payload(payload)
+
+        self.assertEqual(loaded.status, AgentSessionStatus.RUNNING)
+        self.assertEqual(loaded.run_fence_generation, 1)
+        self.assertEqual(loaded.active_run_id, "run-active")
+        self.assertEqual(loaded.active_run_lease_expires_at, loaded.updated_at)
 
 
 class JsonCodecPendingActionTest(unittest.TestCase):
@@ -203,7 +253,6 @@ def _session() -> AgentSession:
             deadline_at=started_at + timedelta(seconds=60),
             remaining_runtime_seconds=42.5,
         ),
-        active_run_id="run-active",
         version=7,
         created_at=started_at,
         updated_at=started_at + timedelta(seconds=1),
@@ -212,6 +261,22 @@ def _session() -> AgentSession:
         pending_confirmations=["action-1"],
         context_summary="summary",
         locale="zh-CN",
+    )
+
+
+def _running_session() -> AgentSession:
+    started_at = _fixed_time()
+    return AgentSession(
+        session_id="session-1",
+        status=AgentSessionStatus.RUNNING,
+        messages=[ModelMessage(role="user", content="user")],
+        active_run_id="run-active",
+        run_fence_generation=3,
+        active_run_last_heartbeat_at=started_at,
+        active_run_lease_expires_at=started_at + timedelta(seconds=90),
+        version=4,
+        created_at=started_at,
+        updated_at=started_at + timedelta(seconds=1),
     )
 
 
