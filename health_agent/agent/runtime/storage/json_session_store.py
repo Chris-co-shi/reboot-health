@@ -1,8 +1,8 @@
 """AgentSession 的 JSON 文件 Store Adapter。
 
 该 Store 是显式选择的本地持久化实现：每个 session_id 映射为一个 SHA-256 文件键，
-create/save 在实体级 `.lock` 文件内完成，CAS 比较以磁盘当前 version 为准。它不实现
-RUNNING lease、stale owner recovery 或 orphan PendingAction 清理。
+create/save 在实体级 `.lock` 文件内完成，CAS 比较以磁盘当前 version 为准。它负责
+保存 RUNNING lease 与 checkpoint 字段，但不执行 lease/recovery/orphan 清理策略。
 """
 
 from __future__ import annotations

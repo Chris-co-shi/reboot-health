@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+import os
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -116,6 +117,52 @@ class JsonFilePendingActionStore:
             self._write_unlocked(paths.json_path, pending_action_to_payload(saved))
             return copy_pending_action(saved)
 
+    def list_all(self) -> list[PendingAction]:
+        """维护接口：列出全部 PendingAction 快照。"""
+
+        actions: list[PendingAction] = []
+        try:
+            json_paths = sorted(self.actions_dir.glob("*.json"))
+        except OSError as exc:
+            raise JsonPendingActionStoreIOError("PendingAction store list failed") from exc
+        for json_path in json_paths:
+            lock_path = self.actions_dir / f"{json_path.stem}.lock"
+            with self._locked(lock_path):
+                action = self._read_unlocked_without_expected_id(json_path)
+                if action is not None:
+                    if safe_entity_key(action.action_id) != json_path.stem:
+                        raise JsonPendingActionStoreDataCorrupted(
+                            "PendingAction id does not match file key"
+                        )
+                    actions.append(action)
+        return actions
+
+    def delete(self, action_id: str, expected_version: int) -> None:
+        """维护接口：按 expected_version 删除 PendingAction JSON 文件。"""
+
+        if expected_version < 0:
+            raise PendingActionVersionConflictError("expected_version must be non-negative")
+        normalized = str(action_id or "").strip()
+        if not normalized:
+            raise PendingActionNotFoundError("PendingAction not found")
+        paths = self._paths(normalized)
+        with self._locked(paths.lock_path):
+            current = self._read_unlocked(
+                paths.json_path,
+                expected_action_id=normalized,
+            )
+            if current is None:
+                raise PendingActionNotFoundError("PendingAction not found")
+            if current.version != expected_version:
+                raise PendingActionVersionConflictError("PendingAction version conflict")
+            try:
+                paths.json_path.unlink()
+                _fsync_directory_best_effort(self.actions_dir)
+            except FileNotFoundError as exc:
+                raise PendingActionNotFoundError("PendingAction not found") from exc
+            except OSError as exc:
+                raise JsonPendingActionStoreIOError("PendingAction store delete failed") from exc
+
     def _paths(self, action_id: str) -> "_EntityPaths":
         key = safe_entity_key(action_id)
         return _EntityPaths(
@@ -157,6 +204,27 @@ class JsonFilePendingActionStore:
         except JsonStoreDataCorrupted as exc:
             raise JsonPendingActionStoreDataCorrupted("PendingAction JSON is corrupted") from exc
 
+    def _read_unlocked_without_expected_id(
+        self,
+        json_path: Path,
+    ) -> PendingAction | None:
+        try:
+            text = json_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise JsonPendingActionStoreIOError("PendingAction store read failed") from exc
+        except UnicodeDecodeError as exc:
+            raise JsonPendingActionStoreDataCorrupted("PendingAction JSON is not UTF-8") from exc
+        try:
+            return pending_action_from_payload(loads_payload(text))
+        except JsonStoreUnsupportedSchema as exc:
+            raise JsonPendingActionStoreUnsupportedSchema(
+                "PendingAction schema is not supported"
+            ) from exc
+        except JsonStoreDataCorrupted as exc:
+            raise JsonPendingActionStoreDataCorrupted("PendingAction JSON is corrupted") from exc
+
     def _write_unlocked(self, json_path: Path, payload: Mapping[str, object]) -> None:
         try:
             self.atomic_writer(json_path, dumps_payload(payload))
@@ -176,3 +244,18 @@ class _EntityPaths:
     def __init__(self, *, json_path: Path, lock_path: Path) -> None:
         self.json_path = json_path
         self.lock_path = lock_path
+
+
+def _fsync_directory_best_effort(path: Path) -> None:
+    """尽力把删除动作同步到目录项；不支持目录 fsync 的平台静默降级。"""
+
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        return
+    finally:
+        os.close(fd)

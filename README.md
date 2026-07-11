@@ -18,13 +18,15 @@
 
 ## Current Status
 
-当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，`INITIAL_PLANNING` 兼容层已完成去污染和真实 LLM 验收。
+当前真实 Python 目录是 [`health_agent/`](health_agent/README.md)。产品运行入口已连接真实 OpenAI-compatible Provider，并默认进入通用 `GenericAgentLoop`；`INITIAL_PLANNING` 兼容层已完成去污染并只作为显式 legacy compatibility 入口保留。
 
 当前阶段：
 
 ```text
 Phase 1 / 1.1 / 1.2 / 1.3：DONE
-Phase 2A 通用只读 Tool Call Agent Loop：READY
+Phase 2A 通用只读 Tool Call Agent Loop：DONE
+Phase 2B Runtime 确认、恢复与 JSON 持久化基础：DONE（显式启用）
+Phase 2B 只读健康上下文工具：TODO
 ```
 
 Phase 2A 的已确认实施规范：
@@ -33,10 +35,12 @@ Phase 2A 的已确认实施规范：
 
 尚未实现：
 
-- 通用 Tool Call Loop。
 - 只读健康上下文工具。
+- Console/API 的确认、拒绝和恢复入口。
+- 后台 orphan cleanup worker。
+- 正式写操作 Tool。
 - FastAPI 产品 API。
-- 数据库、Memory、完整 Safety Guard、Confirmation Pause/Resume。
+- 数据库、Memory、完整 Safety Guard。
 - Plan 发布与 legacy 业务语义迁移。
 
 仓库中仍保留历史 `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 代码；这些目录属于 legacy。Java/Python HTTP 链路和旧 Compose 启动链路当前不可用，不代表当前产品入口。
@@ -45,26 +49,29 @@ Phase 2A 的已确认实施规范：
 
 ```text
 用户输入
-→ Runtime 构建必要上下文
+→ 产品 Bootstrap
+→ GenericAgentLoop
 → OpenAI-compatible ModelProvider.complete_turn(...)
-→ Assistant content
-→ INITIAL_PLANNING 兼容解析
-→ AgentRunResult
-```
-
-Phase 2A 完成后的目标链路：
-
-```text
-用户输入
-→ 通用 AgentLoop
 → Assistant content 或原生 Tool Call
 → 只读 ToolExecutor
 → role=tool Result
 → 下一次 Model Turn
-→ 最终自然语言回答
+→ AgentRunResult
 ```
 
-当前兼容层收到 Tool Call 时仍会明确失败；不要将目标链路描述成已经实现。
+显式启用本地 JSON Store 时，Runtime 可持久化 Session、PendingAction、RUNNING lease、
+execution checkpoint，并提供 stale recovery 与 orphan PendingAction 维护工具。默认
+`agent.main` 和 `scripts/agent_console.py` 仍使用内存 Store。
+
+当前确认/恢复能力是 Runtime 基础协议，不等同于 Console/API 已提供用户操作入口，也不代表正式写操作 Tool 已上线。
+
+历史 `INITIAL_PLANNING` 兼容入口：
+
+```text
+用户输入
+→ legacy compatibility adapter
+→ INITIAL_PLANNING 兼容解析
+```
 
 ## Python Quick Start
 

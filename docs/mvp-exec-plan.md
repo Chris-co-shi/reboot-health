@@ -9,6 +9,7 @@
 | 状态 | 含义 |
 |---|---|
 | `DONE` | 自动化验证和要求的真实运行验收均完成 |
+| `DONE_EXPLICIT` | 自动化验收完成，但能力需要显式启用或显式调用，尚非默认产品流程 |
 | `READY` | 设计、范围和验收标准已确认，可以开始实现 |
 | `IN_PROGRESS` | 正在实施，尚未完成全部验收 |
 | `IMPLEMENTED_WITH_BLOCKERS` | 主体代码存在，但真实环境或关键验收仍被阻塞 |
@@ -22,9 +23,9 @@
 ```text
 当前架构：Python-first 模块化单体
 当前真实目录：health_agent/
-当前已完成：Phase 1、1.1、1.2、1.3、Phase 2A
-当前待实施：Phase 2B 只读健康上下文工具
-下一步：先确定只读健康上下文的数据来源与 Repository Port，再实施 Phase 2B
+当前已完成：Phase 1、1.1、1.2、1.3、Phase 2A、Phase 2B Runtime 持久化安全 Slice
+当前待实施：Phase 2B 只读健康上下文工具、Console/API 确认入口、产品级 Safety
+下一步：先确定只读健康上下文的数据来源与 Repository Port，或将显式 Runtime Store 接入后续 CLI/API
 ```
 
 当前产品链路是：
@@ -230,9 +231,51 @@ git diff --check
 - 产品路径无 Mock/Fake/Smoke。
 - 未记录 API Key、Base URL、完整 Prompt 或完整模型响应。
 
+### Phase 2B Runtime 持久化安全 Slice
+
+状态：`DONE_EXPLICIT`
+
+说明：这一组 Slice 完成的是 Agent Runtime 在确认、恢复和本地 JSON 持久化下的安全基础；
+它不等同于只读健康上下文工具已经完成，也不表示默认产品入口已经启用磁盘持久化。
+
+完成内容：
+
+- `AgentSession` 支持 RUNNING ownership、`active_run_id`、`run_fence_generation`、
+  heartbeat 和 lease。
+- `GenericAgentLoop` 在运行开始、heartbeat、checkpoint 和 finalization 时执行 fence
+  校验，旧 owner 失去 ownership 后不得继续写入。
+- JSON Session Store schema 支持 lease 与 execution checkpoint，并保留 v1/v2 安全迁移。
+- `RunExecutionCheckpoint` 记录 `DRIVE_READY`、`MODEL_CALL_IN_FLIGHT`、
+  `TOOL_CALL_IN_FLIGHT` 和 `FINALIZING`。
+- stale recovery 只自动恢复 `DRIVE_READY`；模型调用中、工具调用中和最终收敛中的不确定状态
+  fail-closed，不自动重试或覆盖。
+- PendingAction Store 支持显式维护扫描、CAS 过期未引用 `PENDING`、CAS 删除超过 retention 的
+  未引用终态 Action。
+
+不包含：
+
+- 后台 worker 或定时清理。
+- Console/API 的确认、拒绝、恢复命令。
+- 正式写操作 Tool。
+- SQLite、Redis、FastAPI 或消息队列。
+- 产品级 Safety Guard、Memory 或多 Agent。
+
+自动化验收：
+
+```bash
+cd health_agent
+python3 -m compileall agent tests
+python3 -m unittest discover -s tests -v
+python3 -m unittest tests.test_json_store_multiprocess -v
+python3 -m unittest tests.test_run_lease_multiprocess -v
+python3 -m unittest tests.test_stale_recovery -v
+python3 -m unittest tests.test_orphan_pending_actions -v
+git diff --check
+```
+
 ## 5. 后续阶段
 
-### Phase 2B：只读健康上下文工具
+### Phase 2B 后续：只读健康上下文工具
 
 状态：`TODO`
 
@@ -252,8 +295,8 @@ git diff --check
 
 范围：
 
-- SQLite 或其它经确认的本地持久化。
-- Session/Event 模型。
+- 将显式 JSON Runtime Store 或后续确认的持久化方案接入产品 CLI/API。
+- Session/Event 模型与产品审计摘要。
 - AgentRun 与 ToolCall 审计摘要。
 - 运行恢复所需的最小状态。
 

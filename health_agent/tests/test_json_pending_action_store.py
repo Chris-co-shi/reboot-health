@@ -153,6 +153,16 @@ class JsonFilePendingActionStoreTest(unittest.TestCase):
             with self.assertRaises(JsonPendingActionStoreDataCorrupted):
                 store.get("action-1")
 
+    def test_list_all_rejects_file_key_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonFilePendingActionStore(directory, now_provider=_fixed_now)
+            action_path = Path(directory) / "pending-actions" / f"{safe_entity_key('action-1')}.json"
+            payload = pending_action_to_payload(_pending_action(action_id="other-action"))
+            atomic_write_text(action_path, dumps_payload(payload))
+
+            with self.assertRaises(JsonPendingActionStoreDataCorrupted):
+                store.list_all()
+
     def test_atomic_write_failure_preserves_old_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = JsonFilePendingActionStore(directory, now_provider=_fixed_now)

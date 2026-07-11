@@ -29,19 +29,20 @@ docs/decisions/0010-python-modular-monolith-and-agent-loop.md
 ## 当前阶段约束
 
 - Phase 1、1.1、1.2、1.3 已完成真实 LLM Provider、配置收口、真实连接验收和兼容层去污染。
-- Phase 2A 状态为 `READY`，尚未实现。
-- Phase 2A 的唯一实施交接规范是 `docs/implementation/phase-2a-read-only-tool-call-loop.md`。
+- Phase 2A 通用只读 Tool Call Agent Loop 已完成并经过真实 LLM Tool Call 验收。
+- Phase 2B Runtime 确认、恢复与 JSON 持久化基础已完成显式能力；默认产品入口仍使用内存 Store。
+- Phase 2A 的实施交接规范保留在 `docs/implementation/phase-2a-read-only-tool-call-loop.md`，作为已完成阶段的验收参考。
 - 产品运行 Provider 为 OpenAI-compatible `ModelProvider.complete_turn(...)`。
 - 产品 LLM 配置使用 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_TIMEOUT_SECONDS`；Bootstrap 从 `health_agent/.env` 加载，shell 环境变量优先。
-- `INITIAL_PLANNING` 仍是临时兼容业务入口，不代表最终 Agent 架构。
-- 通用 Tool Call Loop、FastAPI、数据库、Memory、完整 Safety、Confirmation Resume、Plan 发布和 DailyRecord 尚未实现。
+- `INITIAL_PLANNING` 仍是显式 legacy compatibility 入口，不代表最终 Agent 架构。
+- 只读健康上下文工具、FastAPI、数据库、Memory、完整 Safety、Console/API Confirmation 入口、Plan 发布和 DailyRecord 尚未实现。
 - 历史 `backend/`、`clients/flutter/`、`frontend/`、`deploy/` 默认视为 legacy；未经用户明确要求不得扩展其业务能力。
 - Java/Python HTTP 链路当前不可用，不得在未获授权时顺手修复。
 - 不得把未运行、未构建、未真实验收的能力写成 `DONE`。
 
 ## 开发前阅读顺序
 
-实施 Phase 2A 前必须按顺序读取：
+实施 Agent Runtime 相关任务前必须按顺序读取：
 
 ```text
 AGENTS.md
@@ -87,7 +88,7 @@ Agent Runtime 只负责：
 - 最大轮次。
 - 超时。
 - 错误收敛。
-- 后续 Confirmation Pause 状态协议。
+- Confirmation Pause/Resume 状态协议。
 - Event/Trace。
 
 Provider 只负责：
@@ -110,7 +111,7 @@ Tool Runtime 负责：
 - ToolExecutor 确定性执行。
 - 结构化 Tool Result 和错误。
 
-Phase 2A 只允许只读或纯计算 Tool，不允许写操作、数据库访问、发布或确认。
+当前正式 Tool 仍只允许只读或纯计算能力；不允许未经独立阶段批准新增写操作、数据库访问或发布能力。
 
 测试替身只能放在 `health_agent/tests/`，不得被产品 Bootstrap 引用。
 
@@ -162,7 +163,7 @@ cd ..
 git diff --check
 ```
 
-Phase 2A 还必须执行实施规范要求的产品测试替身搜索、任意代码执行能力搜索和真实 LLM Tool Call 验收。
+涉及通用 Tool Call Loop 变更时，还必须执行实施规范要求的产品测试替身搜索、任意代码执行能力搜索和真实 LLM Tool Call 验收。
 
 ## 完成定义
 

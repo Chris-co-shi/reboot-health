@@ -12,7 +12,7 @@
 ../docs/decisions/0010-python-modular-monolith-and-agent-loop.md
 ```
 
-Phase 2A 的唯一工程交接规范：
+Phase 2A 的工程交接与验收参考：
 
 ```text
 ../docs/implementation/phase-2a-read-only-tool-call-loop.md
@@ -24,10 +24,10 @@ Phase 2A 的唯一工程交接规范：
 
 - Phase 1、1.1、1.2、1.3 已完成。
 - 产品运行 Provider 是真实 OpenAI-compatible `ModelProvider.complete_turn(...)`。
-- `INITIAL_PLANNING` 是已验证但仍待隔离的 legacy compatibility adapter。
-- Phase 2A 状态为 `READY`，目标是通用只读 Tool Call Agent Loop。
-- 当前 ToolExecutor 仍是 skeleton；在 Phase 2A 完成并真实验收前不得宣称具备产品工具调用能力。
-- PostgreSQL、Redis、FastAPI、正式 Persistence、Memory、Safety Guard、Confirmation、Plan Publish、多 Agent、MCP、消息队列和向量数据库尚未接入。
+- `INITIAL_PLANNING` 是已验证且已隔离的显式 legacy compatibility adapter。
+- Phase 2A 通用只读 Tool Call Agent Loop 已完成并经过真实 LLM Tool Call 验收。
+- Phase 2B Runtime 确认、恢复与 JSON 持久化基础已完成显式能力；默认产品入口仍使用内存 Store。
+- PostgreSQL、Redis、FastAPI、Memory、产品级 Safety Guard、Console/API Confirmation 入口、Plan Publish、多 Agent、MCP、消息队列和向量数据库尚未接入。
 
 ## Phase 2A 任务合同
 
@@ -77,7 +77,7 @@ Agent Runtime 只负责：
 - 整体超时。
 - 错误收敛。
 - RunTrace。
-- 后续阶段的 Session/Confirmation 协议边界，但本阶段不实现。
+- Session/Confirmation 协议边界、运行租约、checkpoint 和恢复分类。
 
 Runtime 不得包含：
 
@@ -86,7 +86,7 @@ Runtime 不得包含：
 - Program、Phase、WeeklyPlan、TodayAction。
 - 数据库访问。
 - 用户健康事实硬编码。
-- 写操作、确认或发布策略。
+- 写操作执行、业务确认决策或发布策略。
 
 ## ModelProvider 边界
 

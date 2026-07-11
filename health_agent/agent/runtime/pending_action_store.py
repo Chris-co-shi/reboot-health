@@ -89,3 +89,28 @@ class InMemoryPendingActionStore:
             )
             self._actions[saved.action_id] = copy_pending_action(saved)
             return copy_pending_action(saved)
+
+    def list_all(self) -> list[PendingAction]:
+        """维护接口：返回全部 PendingAction 快照，不暴露内部可变对象。"""
+
+        with self._lock:
+            return [copy_pending_action(action) for action in self._actions.values()]
+
+    def delete(self, action_id: str, expected_version: int) -> None:
+        """维护接口：按 expected_version 删除 PendingAction。"""
+
+        if expected_version < 0:
+            raise PendingActionVersionConflictError("expected_version must be non-negative")
+        normalized = str(action_id or "").strip()
+        with self._lock:
+            current = self._actions.get(normalized)
+            if current is None:
+                raise PendingActionNotFoundError(
+                    f"PendingAction not found: {normalized}"
+                )
+            if current.version != expected_version:
+                raise PendingActionVersionConflictError(
+                    f"PendingAction version conflict: expected {expected_version}, "
+                    f"got {current.version}"
+                )
+            del self._actions[normalized]
