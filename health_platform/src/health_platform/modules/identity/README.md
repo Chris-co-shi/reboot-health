@@ -24,5 +24,7 @@ modules/identity/
 - 全部 Identity Repository Port 已有显式 Domain/Row 双向 Mapper 和 SQL 实现；生产使用 `SqlAlchemyIdentityUnitOfWork`，Audit/Outbox 与身份状态同事务。
 - production Composition Root 不再回退 InMemory；关键数据库、密钥、签名与第一方 OAuth 配置缺失时 fail-closed。
 - readiness 验证 PostgreSQL 连接、单 Alembic Head 与当前 revision；不执行 migration 或 `create_all`。
+- Application 已提供管理员授予/撤销、禁用用户、单 Session 与全部 Session 撤销；管理员必须是 `ADMIN_OPERATOR`、携带 MFA 上下文且只能管理其他用户，重复操作不重复写 Audit/Outbox。
+- Access Token 每次以 PostgreSQL 的 User、Session、Grant 和 `permission_version` 为权威校验；Redis 仅作可失败缓存。Refresh 使用 Token Family 行锁串行化，重放安全状态与 Session/Grant/Audit/Outbox 同事务提交。
 
-未完成（参见 Slice 2 完成记录）：管理员 Application Use Case、完整 Refresh 并发/重放、OAuthLib/Client Credentials 完整闭环、Redis IP/设备限流、MFA 关闭/重置、SMTP Outbox Processor、OTel instrumentation。
+未完成（参见 Slice 2 完成记录）：管理员 HTTP 合同、OAuthLib/Client Credentials 完整闭环、Redis IP/设备限流、MFA 关闭/重置、SMTP Outbox Processor、OTel instrumentation。

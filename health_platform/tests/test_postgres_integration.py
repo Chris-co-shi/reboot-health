@@ -29,11 +29,16 @@ from health_platform.modules.audit.adapters.persistence import (
 )
 from health_platform.modules.audit.domain.models import AuditEvent, OutboxEvent, OutboxStatus
 from health_platform.modules.identity.adapters.persistence import (
+    AccessTokenRow,
     OAuthClientRow,
+    RefreshTokenRow,
+    SessionRow,
     SqlOAuthClientRepository,
     SqlTokenFamilyRepository,
+    TokenFamilyRow,
     UserRow,
 )
+from health_platform.modules.identity.application.policy import Principal
 from health_platform.modules.identity.application.ports import (
     AuthorizationGrant,
     MfaState,
@@ -42,8 +47,11 @@ from health_platform.modules.identity.application.ports import (
 from health_platform.modules.identity.application.service import IdentityService
 from health_platform.modules.identity.domain.models import (
     AccountDeletionRequest,
+    ActorKind,
     RecoveryCode,
+    Role,
     TokenFamily,
+    TokenFamilyStatus,
     UserAccount,
 )
 from health_platform.platform.configuration.settings import Settings
@@ -381,6 +389,120 @@ def test_token_family_for_update_holds_real_row_lock(migrated_url: str) -> None:
         second.rollback()
         first.close()
         second.close()
+
+
+def test_refresh_concurrency_detects_replay_and_revokes_first_success(migrated_url: str) -> None:
+    engine = create_engine(migrated_url, pool_size=15, max_overflow=0)
+    service = _service(engine)
+    _, verification = service.register(
+        "refresh-race@example.com", "refresh-race", "Refresh Race", "a secure race password"
+    )
+    service.verify_email(verification)
+    initial = service.login(
+        "refresh-race", "a secure race password", "flutter", "race phone", "flutter"
+    )
+    old_refresh = str(initial["refresh_token"])
+    session_id = service.authenticate(str(initial["access_token"])).session_id
+    barrier = Barrier(12)
+
+    def rotate(_: int) -> tuple[str, str]:
+        barrier.wait()
+        try:
+            result = service.refresh(old_refresh)
+            return "success", str(result["refresh_token"])
+        except Exception as exc:
+            return "error", str(getattr(exc, "code", type(exc).__name__))
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(rotate, range(12)))
+
+    successes = [value for kind, value in results if kind == "success"]
+    errors = [value for kind, value in results if kind == "error"]
+    with Session(engine) as session:
+        family = session.query(TokenFamilyRow).filter_by(session_id=session_id).one()
+        token_count = session.query(RefreshTokenRow).filter_by(family_id=family.id).count()
+        valid_access_count = (
+            session.query(AccessTokenRow).filter_by(session_id=session_id, revoked_at=None).count()
+        )
+        replay_audits = (
+            session.query(AuditEventRow)
+            .filter_by(action="identity.token.replay", resource_id=session_id)
+            .count()
+        )
+        stored_session = session.query(SessionRow).filter_by(id=session_id).one()
+        print(
+            "Refresh concurrency=12 "
+            f"family={family.status} replacements={token_count - 1} "
+            f"valid_access_grants={valid_access_count}"
+        )
+        assert family.status == TokenFamilyStatus.REPLAY_COMPROMISED.value
+        assert stored_session.status == "REVOKED"
+        assert token_count == 2
+        assert valid_access_count == 0
+        assert replay_audits == 1
+    assert len(successes) == 1
+    assert "IDENTITY_REFRESH_TOKEN_REPLAY" in errors
+    engine.dispose()
+
+
+def test_admin_role_change_rolls_back_when_outbox_fails(migrated_url: str) -> None:
+    engine = create_engine(migrated_url)
+    factory = create_session_factory(engine)
+    normal = _service(engine)
+    admin, _ = normal.register(
+        "rollback-admin@example.com", "rollback-admin", "Rollback Admin", "secure admin password"
+    )
+    target, _ = normal.register(
+        "rollback-target@example.com",
+        "rollback-target",
+        "Rollback Target",
+        "secure target password",
+    )
+    with SqlAlchemyIdentityUnitOfWork(factory) as uow:
+        uow.set_security_context(None, "BACKGROUND")
+        stored_admin = uow.users.get(admin.id)
+        assert stored_admin is not None
+        stored_admin.grant_admin_operator()
+        uow.users.save(stored_admin)
+        uow.commit()
+    principal = Principal(
+        subject_id=str(admin.id),
+        actor_kind=ActorKind.ADMIN_OPERATOR,
+        user_id=admin.id,
+        roles=frozenset({Role.USER, Role.ADMIN_OPERATOR}),
+        mfa_authenticated=True,
+    )
+
+    class FailingOutbox:
+        def enqueue(self, event) -> None:
+            raise RuntimeError("injected outbox failure")
+
+    class FailingOutboxUoW(SqlAlchemyIdentityUnitOfWork):
+        def __enter__(self):
+            result = super().__enter__()
+            self.outbox = FailingOutbox()
+            return result
+
+    failing = IdentityService(
+        PasswordService(),
+        AesGcmEncryptionService(StaticKeyManagementAdapter("v1", {"v1": b"x" * 32})),
+        "test-pepper",
+        uow_factory=lambda: FailingOutboxUoW(factory),
+    )
+    with Session(engine) as session:
+        before_audits = session.query(AuditEventRow).count()
+        before_outbox = session.query(OutboxEventRow).count()
+        before_version = session.get(UserRow, target.id).permission_version
+    with pytest.raises(RuntimeError, match="injected outbox failure"):
+        failing.grant_admin_operator(principal, target.id)
+    with Session(engine) as session:
+        restored = session.get(UserRow, target.id)
+        assert restored is not None
+        assert restored.permission_version == before_version
+        assert Role.ADMIN_OPERATOR.value not in restored.roles
+        assert session.query(AuditEventRow).count() == before_audits
+        assert session.query(OutboxEventRow).count() == before_outbox
+    engine.dispose()
 
 
 def test_oauth_client_initialization_is_idempotent_and_conflict_safe(migrated_url: str) -> None:

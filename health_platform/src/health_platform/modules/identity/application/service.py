@@ -19,6 +19,7 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from health_platform.modules.audit.domain.models import AuditEvent, OutboxEvent
+from health_platform.modules.identity.application.policy import Principal, require_admin_operator
 from health_platform.modules.identity.application.ports import (
     AccessGrant,
     AuthorizationGrant,
@@ -373,7 +374,7 @@ class IdentityService:
     ) -> dict[str, object]:
         presented_hash = hash_secret(refresh_token, self._pepper)
 
-        def body(uow: IdentityUnitOfWork) -> dict[str, object]:
+        def body(uow: IdentityUnitOfWork) -> dict[str, object] | IdentityError:
             family = uow.token_families.find_by_refresh_hash(presented_hash)
             if family is None:
                 raise IdentityError("IDENTITY_INVALID_REFRESH_TOKEN", "Refresh Token 无效")
@@ -409,6 +410,7 @@ class IdentityService:
                         user.id,
                         {"type": "refresh_replay"},
                     )
+                    return exc
                 raise
             uow.token_families.save(family)
             access = self._issue_access(uow, user, session, audience)
@@ -421,18 +423,16 @@ class IdentityService:
                 "refresh_token_expires_in": int(self._refresh_ttl.total_seconds()),
             }
 
-        return self._write("user", None, body)
+        result = self._write("user", None, body)
+        if isinstance(result, IdentityError):
+            raise result
+        return result
 
     def authenticate(self, access_token: str) -> AccessGrant:
         token_hash = hash_secret(access_token, self._pepper)
 
         def body(uow: IdentityUnitOfWork) -> AccessGrant:
-            cached = self._cache.get(f"auth:{token_hash}")
             grant = uow.access_grants.get_by_hash(token_hash)
-            if cached is not None and grant is not None:
-                cached_version = cached.get("permission_version")
-                if isinstance(cached_version, int) and grant.permission_version == cached_version:
-                    return grant
             now = utc_now()
             if grant is None or grant.revoked_at is not None or grant.expires_at <= now:
                 raise IdentityError("AUTHENTICATION_REQUIRED", "需要登录")
@@ -457,17 +457,14 @@ class IdentityService:
 
         return self._read(body)
 
-    def revoke_session(self, actor_user_id: UUID, session_id: UUID) -> None:
-        def body(uow: IdentityUnitOfWork) -> None:
+    def revoke_session(self, actor_user_id: UUID, session_id: UUID) -> bool:
+        def body(uow: IdentityUnitOfWork) -> bool:
             session = uow.sessions.get(session_id)
             if session is None or session.user_id != actor_user_id:
                 raise IdentityError("CROSS_USER_ACCESS_DENIED", "无权访问该会话")
-            session.revoke()
-            uow.sessions.save(session)
-            for family in uow.token_families.list_for_session(session_id):
-                family.revoke()
-                uow.token_families.save(family)
-            self._revoke_session_access_grants(uow, session_id)
+            changed = self._revoke_session_with_cascade(uow, actor_user_id, session_id)
+            if not changed:
+                return False
             self._audit(
                 uow,
                 "USER",
@@ -477,8 +474,101 @@ class IdentityService:
                 session_id,
                 "SUCCESS",
             )
+            self._enqueue(
+                uow, "identity.session_revoked", actor_user_id, {"session_id": str(session_id)}
+            )
+            return True
 
-        self._write("user", actor_user_id, body)
+        return self._write("user", actor_user_id, body)
+
+    def grant_admin_operator(self, principal: Principal, target_user_id: UUID) -> bool:
+        return self._change_admin_role(principal, target_user_id, grant=True)
+
+    def revoke_admin_operator(self, principal: Principal, target_user_id: UUID) -> bool:
+        return self._change_admin_role(principal, target_user_id, grant=False)
+
+    def disable_user(self, principal: Principal, target_user_id: UUID) -> bool:
+        self._require_admin_target(principal, target_user_id)
+
+        def body(uow: IdentityUnitOfWork) -> bool:
+            user = self._require_user(uow, target_user_id)
+            if not user.disable():
+                return False
+            uow.users.save(user)
+            for session in uow.sessions.list_for_user(target_user_id):
+                self._revoke_session_with_cascade(uow, target_user_id, session.id)
+            self._cache_invalidate_user(uow, target_user_id)
+            self._audit(
+                uow,
+                "ADMIN_OPERATOR",
+                principal.user_id,
+                "identity.user.disable",
+                "user",
+                target_user_id,
+                "SUCCESS",
+            )
+            self._enqueue(
+                uow,
+                "identity.user_disabled",
+                target_user_id,
+                {"permission_version": str(user.permission_version)},
+            )
+            return True
+
+        return self._write("admin_operator", principal.user_id, body)
+
+    def revoke_user_session(self, principal: Principal, session_id: UUID) -> bool:
+        require_admin_operator(principal)
+
+        def body(uow: IdentityUnitOfWork) -> bool:
+            session = uow.sessions.get(session_id)
+            if session is None:
+                raise IdentityError("IDENTITY_SESSION_NOT_FOUND", "会话不存在")
+            self._require_admin_target(principal, session.user_id)
+            changed = self._revoke_session_with_cascade(uow, session.user_id, session_id)
+            if changed:
+                self._audit(
+                    uow,
+                    "ADMIN_OPERATOR",
+                    principal.user_id,
+                    "identity.session.revoke",
+                    "session",
+                    session_id,
+                    "SUCCESS",
+                )
+                self._enqueue(
+                    uow,
+                    "identity.session_revoked",
+                    session.user_id,
+                    {"session_id": str(session_id)},
+                )
+            return changed
+
+        return self._write("admin_operator", principal.user_id, body)
+
+    def revoke_all_user_sessions(self, principal: Principal, target_user_id: UUID) -> bool:
+        self._require_admin_target(principal, target_user_id)
+
+        def body(uow: IdentityUnitOfWork) -> bool:
+            self._require_user(uow, target_user_id)
+            changed = False
+            for session in uow.sessions.list_for_user(target_user_id):
+                if self._revoke_session_with_cascade(uow, target_user_id, session.id):
+                    changed = True
+            if changed:
+                self._audit(
+                    uow,
+                    "ADMIN_OPERATOR",
+                    principal.user_id,
+                    "identity.sessions.revoke_all",
+                    "user",
+                    target_user_id,
+                    "SUCCESS",
+                )
+                self._enqueue(uow, "identity.all_sessions_revoked", target_user_id, {})
+            return changed
+
+        return self._write("admin_operator", principal.user_id, body)
 
     def enroll_mfa(self, user_id: UUID) -> tuple[str, list[str]]:
         def body(uow: IdentityUnitOfWork) -> tuple[str, list[str]]:
@@ -642,6 +732,45 @@ class IdentityService:
     # 内部辅助
     # -----------------------------
 
+    def _require_admin_target(self, principal: Principal, target_user_id: UUID) -> None:
+        require_admin_operator(principal)
+        if principal.user_id == target_user_id:
+            raise IdentityError(
+                "IDENTITY_ADMIN_SELF_MANAGEMENT_DENIED", "管理员不能通过此用例管理自身"
+            )
+
+    def _change_admin_role(
+        self, principal: Principal, target_user_id: UUID, *, grant: bool
+    ) -> bool:
+        self._require_admin_target(principal, target_user_id)
+
+        def body(uow: IdentityUnitOfWork) -> bool:
+            user = self._require_user(uow, target_user_id)
+            changed = user.grant_admin_operator() if grant else user.revoke_admin_operator()
+            if not changed:
+                return False
+            uow.users.save(user)
+            self._cache_invalidate_user(uow, target_user_id)
+            action = "grant_admin_operator" if grant else "revoke_admin_operator"
+            self._audit(
+                uow,
+                "ADMIN_OPERATOR",
+                principal.user_id,
+                f"identity.role.{action}",
+                "user",
+                target_user_id,
+                "SUCCESS",
+            )
+            self._enqueue(
+                uow,
+                "identity.permission_changed",
+                target_user_id,
+                {"action": action, "permission_version": str(user.permission_version)},
+            )
+            return True
+
+        return self._write("admin_operator", principal.user_id, body)
+
     def _require_user(self, uow: IdentityUnitOfWork, user_id: UUID) -> UserAccount:
         user = uow.users.get(user_id)
         if user is None:
@@ -712,25 +841,34 @@ class IdentityService:
 
     def _revoke_session_with_cascade(
         self, uow: IdentityUnitOfWork, actor_user_id: UUID, session_id: UUID
-    ) -> None:
+    ) -> bool:
         session = uow.sessions.get(session_id)
         if session is None or session.user_id != actor_user_id:
             raise IdentityError("CROSS_USER_ACCESS_DENIED", "无权访问该会话")
-        session.revoke()
-        uow.sessions.save(session)
+        changed = session.revoke()
+        if changed:
+            uow.sessions.save(session)
         for family in uow.token_families.list_for_session(session_id):
+            was_active = family.status.value == "ACTIVE"
             family.revoke()
-            uow.token_families.save(family)
-        self._revoke_session_access_grants(uow, session_id)
+            if was_active:
+                changed = True
+                uow.token_families.save(family)
+        if self._revoke_session_access_grants(uow, session_id):
+            changed = True
+        return changed
 
-    def _revoke_session_access_grants(self, uow: IdentityUnitOfWork, session_id: UUID) -> None:
+    def _revoke_session_access_grants(self, uow: IdentityUnitOfWork, session_id: UUID) -> bool:
         now = utc_now()
+        changed = False
         for grant in uow.access_grants.list_for_session(session_id):
             if grant.revoked_at is None:
+                changed = True
                 grant.revoked_at = now
                 uow.access_grants.save(grant)
                 token_hash = grant.token_hash
                 uow.run_after_commit(self._make_cache_delete(token_hash))
+        return changed
 
     def _cache_invalidate_user(self, uow: IdentityUnitOfWork, user_id: UUID) -> None:
         for grant in uow.access_grants.list_for_user(user_id):

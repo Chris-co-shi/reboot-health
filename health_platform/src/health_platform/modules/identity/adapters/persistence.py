@@ -555,7 +555,7 @@ class SqlTokenFamilyRepository:
             select(TokenFamilyRow)
             .join(RefreshTokenRow, RefreshTokenRow.family_id == TokenFamilyRow.id)
             .where(RefreshTokenRow.token_hash == presented_hash)
-            .with_for_update()
+            .with_for_update(of=TokenFamilyRow)
         )
         return self.to_domain(row) if row else None
 

@@ -5,18 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from redis.exceptions import RedisError
 
 from health_platform.modules.identity.application.in_memory_uow import InMemoryUnitOfWork
+from health_platform.modules.identity.application.policy import Principal
 from health_platform.modules.identity.application.service import (
     IdentityService,
     OAuthClient,
     totp_code,
 )
-from health_platform.modules.identity.domain.models import IdentityError
+from health_platform.modules.identity.domain.models import ActorKind, IdentityError, Role
 from health_platform.platform.encryption.service import (
     AesGcmEncryptionService,
     StaticKeyManagementAdapter,
 )
+from health_platform.platform.security.cache import RedisAuthCache
 from health_platform.platform.security.passwords import PasswordService
 
 
@@ -40,6 +43,21 @@ def service(uow_factory) -> IdentityService:
 
 def register(service: IdentityService):
     return service.register("alice@example.com", "Alice", "Alice", "correct horse battery staple")
+
+
+def admin_principal(service: IdentityService, uow: InMemoryUnitOfWork) -> Principal:
+    admin = service.register(
+        "admin@example.com", "admin", "Admin", "admin correct horse battery staple"
+    )[0]
+    admin.grant_admin_operator()
+    uow.users.save(admin)
+    return Principal(
+        subject_id=str(admin.id),
+        actor_kind=ActorKind.ADMIN_OPERATOR,
+        user_id=admin.id,
+        roles=frozenset({Role.USER, Role.ADMIN_OPERATOR}),
+        mfa_authenticated=True,
+    )
 
 
 def test_register_writes_audit_and_email_outbox(service: IdentityService, uow) -> None:
@@ -132,6 +150,119 @@ def test_cross_user_session_revoke_is_blocked(service: IdentityService) -> None:
             other.id, service.authenticate(str(tokens["access_token"])).session_id
         )
     assert exc.value.code == "CROSS_USER_ACCESS_DENIED"
+
+
+def test_admin_management_requires_role_mfa_and_other_user(service, uow) -> None:
+    target, _ = register(service)
+    user_principal = Principal(
+        subject_id=str(target.id), actor_kind=ActorKind.USER, user_id=target.id
+    )
+    with pytest.raises(IdentityError):
+        service.grant_admin_operator(user_principal, target.id)
+
+    service_principal = Principal(
+        subject_id="health-agent", actor_kind=ActorKind.SERVICE_HEALTH_AGENT
+    )
+    with pytest.raises(IdentityError):
+        service.disable_user(service_principal, target.id)
+
+    admin = admin_principal(service, uow)
+    no_mfa = Principal(**{**admin.__dict__, "mfa_authenticated": False})
+    with pytest.raises(IdentityError):
+        service.grant_admin_operator(no_mfa, target.id)
+    with pytest.raises(IdentityError) as self_management:
+        service.revoke_admin_operator(admin, admin.user_id)
+    assert self_management.value.code == "IDENTITY_ADMIN_SELF_MANAGEMENT_DENIED"
+
+
+def test_admin_role_and_disable_are_idempotent_and_invalidate_old_access(service, uow) -> None:
+    target, verification = register(service)
+    service.verify_email(verification)
+    tokens = service.login("alice", "correct horse battery staple", "app", "phone", "flutter")
+    admin = admin_principal(service, uow)
+    original_version = target.permission_version
+    audit_count = len(uow.audit.entries())
+    outbox_count = len(uow.outbox.entries())
+
+    assert service.grant_admin_operator(admin, target.id)
+    assert not service.grant_admin_operator(admin, target.id)
+    assert uow.users.get(target.id).permission_version == original_version + 1
+    assert len(uow.audit.entries()) == audit_count + 1
+    assert len(uow.outbox.entries()) == outbox_count + 1
+    with pytest.raises(IdentityError):
+        service.authenticate(str(tokens["access_token"]))
+
+    assert service.revoke_admin_operator(admin, target.id)
+    assert not service.revoke_admin_operator(admin, target.id)
+    version_before_disable = uow.users.get(target.id).permission_version
+    assert service.disable_user(admin, target.id)
+    assert not service.disable_user(admin, target.id)
+    assert uow.users.get(target.id).permission_version == version_before_disable + 1
+
+
+def test_single_and_all_session_revocation_are_isolated_and_idempotent(service, uow) -> None:
+    target, verification = register(service)
+    service.verify_email(verification)
+    first = service.login("alice", "correct horse battery staple", "app", "phone", "flutter")
+    second = service.login("alice", "correct horse battery staple", "app", "tablet", "flutter")
+    first_session = service.authenticate(str(first["access_token"])).session_id
+    assert service.revoke_session(target.id, first_session)
+    assert not service.revoke_session(target.id, first_session)
+    service.authenticate(str(second["access_token"]))
+
+    admin = admin_principal(service, uow)
+    assert service.revoke_all_user_sessions(admin, target.id)
+    assert not service.revoke_all_user_sessions(admin, target.id)
+    with pytest.raises(IdentityError):
+        service.authenticate(str(second["access_token"]))
+
+
+def test_stale_cache_and_redis_failure_cannot_bypass_database_authority(service, uow) -> None:
+    target, verification = register(service)
+    service.verify_email(verification)
+    tokens = service.login("alice", "correct horse battery staple", "app", "phone", "flutter")
+
+    class StaleCache:
+        def get(self, key):
+            return {"permission_version": target.permission_version}
+
+        def set(self, key, value, ttl_seconds):
+            return None
+
+        def delete(self, key):
+            return None
+
+    stale_service = IdentityService(
+        PasswordService(),
+        AesGcmEncryptionService(StaticKeyManagementAdapter("v1", {"v1": b"x" * 32})),
+        "pepper",
+        uow_factory=lambda: uow,
+        cache=StaleCache(),
+    )
+    admin = admin_principal(service, uow)
+    service.grant_admin_operator(admin, target.id)
+    with pytest.raises(IdentityError):
+        stale_service.authenticate(str(tokens["access_token"]))
+
+    class BrokenRedis:
+        def get(self, key):
+            raise RedisError("unavailable")
+
+        def setex(self, key, ttl, value):
+            raise RedisError("unavailable")
+
+        def delete(self, key):
+            raise RedisError("unavailable")
+
+    fresh = service.login("alice", "correct horse battery staple", "app", "tablet", "flutter")
+    redis_failure_service = IdentityService(
+        PasswordService(),
+        AesGcmEncryptionService(StaticKeyManagementAdapter("v1", {"v1": b"x" * 32})),
+        "pepper",
+        uow_factory=lambda: uow,
+        cache=RedisAuthCache(BrokenRedis()),
+    )
+    assert redis_failure_service.authenticate(str(fresh["access_token"])).user_id == target.id
 
 
 def test_deletion_revokes_session_and_enqueues_coordination(service: IdentityService, uow) -> None:

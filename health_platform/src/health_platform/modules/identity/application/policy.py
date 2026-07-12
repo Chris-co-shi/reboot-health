@@ -17,6 +17,7 @@ class Principal:
     scopes: frozenset[str] = frozenset()
     audience: str = ""
     permission_version: int = 0
+    mfa_authenticated: bool = False
 
 
 def _deny() -> None:
@@ -37,14 +38,20 @@ def require_human_user(principal: Principal) -> None:
         _deny()
 
 
-def require_admin_operator(principal: Principal, *, mfa_enabled: bool) -> None:
+def require_mfa(principal: Principal) -> None:
+    require_authenticated(principal)
+    if not principal.mfa_authenticated:
+        _deny()
+
+
+def require_admin_operator(principal: Principal) -> None:
     require_human_user(principal)
     if (
         principal.actor_kind is not ActorKind.ADMIN_OPERATOR
         or Role.ADMIN_OPERATOR not in principal.roles
-        or not mfa_enabled
     ):
         _deny()
+    require_mfa(principal)
 
 
 def require_service_health_agent(principal: Principal) -> None:
@@ -69,10 +76,8 @@ def require_self(principal: Principal, resource_user_id: UUID) -> None:
         raise IdentityError("CROSS_USER_ACCESS_DENIED", "禁止跨用户访问")
 
 
-def require_self_or_admin(
-    principal: Principal, resource_user_id: UUID, *, mfa_enabled: bool
-) -> None:
+def require_self_or_admin(principal: Principal, resource_user_id: UUID) -> None:
     if principal.user_id == resource_user_id:
         require_human_user(principal)
         return
-    require_admin_operator(principal, mfa_enabled=mfa_enabled)
+    require_admin_operator(principal)

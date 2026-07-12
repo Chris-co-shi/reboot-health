@@ -197,3 +197,12 @@ Mypy 清零与验收收口（2026-07-12，本轮）：
 - PostgreSQL fixture 优先安全校验后的 `TEST_DATABASE_URL`，回退 PostgreSQL 17-alpine 一次性容器；本轮环境为 PostgreSQL 17.10。
 - 验证结果：非 PG 40 passed；PG 13 passed；全量 53 passed；coverage 91.03%；Ruff/Mypy/Bandit/pip-audit 通过；Alembic current/head 均为 20260712_0003。
 - 仍未完成：管理员 Application Use Case、完整 Refresh 并发/重放、MFA disable/reset、安全问题、Client Credentials、完整限流、SMTP Processor、OTel。Slice 2 保持 `IN_PROGRESS`。
+
+## Identity Administrative Use Cases and Token Security（2026-07-12）
+
+- 完成 `grant_admin_operator`、`revoke_admin_operator`、`disable_user`、用户自撤销 Session、管理员撤销单 Session 与全部用户 Session；Application 强制 `ADMIN_OPERATOR + MFA` 且只允许管理其他用户，无新增管理员 HTTP API。
+- 角色与禁用操作按真实状态变化推进 `permission_version`，重复操作不重复写 Audit/Outbox；Access Token 始终回查 PostgreSQL User/Session/Grant/版本，Redis 陈旧或不可用不能放行旧权限。
+- Session 撤销同事务级联 Access Grant 与 Token Family；单设备撤销不影响其他设备，全量撤销覆盖全部设备。
+- 修复 Refresh 重放安全状态因异常导致事务回滚的问题；SQL Repository 对 Token Family 显式 `FOR UPDATE OF`。PostgreSQL 17.10 的 12 路 Barrier 并发验证：1 次首次成功、1 个 replacement、最终 `REPLAY_COMPROMISED`、Session 已撤销、有效 Access Grant 为 0、重放审计单链无重复。
+- 注入 Outbox 失败验证管理员角色、`permission_version`、Audit 与 Outbox 全部回滚。无 Schema 变化，Alembic Head 保持 `20260712_0003`。
+- 非 PostgreSQL 44 passed，PostgreSQL 15 passed。管理员 HTTP 合同、MFA disable/reset、Client Credentials、完整限流、SMTP Processor 与 OTel 仍未完成，Slice 2 保持 `IN_PROGRESS`。

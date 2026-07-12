@@ -162,13 +162,16 @@ class UserAccount:
         if self.locked_until and self.locked_until > current:
             raise IdentityError("IDENTITY_TEMPORARILY_LOCKED", "账号暂时锁定")
 
-    def disable(self) -> None:
+    def disable(self) -> bool:
         """禁用用户并提高权限版本，使缓存中的旧授权立即失效。"""
         if self.status is UserStatus.DELETED:
             raise IdentityError("IDENTITY_INVALID_STATE", "已删除账号不能禁用")
+        if self.status is UserStatus.DISABLED:
+            return False
         self.status = UserStatus.DISABLED
         self.permission_version += 1
         self.updated_at = utc_now()
+        return True
 
     def grant_admin_operator(self) -> bool:
         """幂等授予唯一高权限人类角色并推进权限版本。"""
@@ -204,11 +207,13 @@ class IdentitySession:
     last_activity_at: datetime = field(default_factory=utc_now)
     revoked_at: datetime | None = None
 
-    def revoke(self, now: datetime | None = None) -> None:
+    def revoke(self, now: datetime | None = None) -> bool:
         """幂等撤销会话；撤销后不得再次活跃。"""
         if self.status is SessionStatus.ACTIVE:
             self.status = SessionStatus.REVOKED
             self.revoked_at = now or utc_now()
+            return True
+        return False
 
 
 @dataclass

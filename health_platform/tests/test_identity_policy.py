@@ -5,6 +5,7 @@ import pytest
 from health_platform.modules.identity.application.policy import (
     Principal,
     require_admin_operator,
+    require_mfa,
     require_scope,
     require_self,
     require_service_health_agent,
@@ -57,10 +58,14 @@ def test_admin_requires_mfa_and_service_is_not_human_user() -> None:
         actor_kind=ActorKind.ADMIN_OPERATOR,
         user_id=admin_id,
         roles=frozenset({Role.USER, Role.ADMIN_OPERATOR}),
+        mfa_authenticated=False,
     )
     with pytest.raises(IdentityError):
-        require_admin_operator(admin, mfa_enabled=False)
-    require_admin_operator(admin, mfa_enabled=True)
+        require_admin_operator(admin)
+    with pytest.raises(IdentityError):
+        require_mfa(admin)
+    admin = Principal(**{**admin.__dict__, "mfa_authenticated": True})
+    require_admin_operator(admin)
 
     service = Principal(
         subject_id="health-agent",
@@ -70,4 +75,4 @@ def test_admin_requires_mfa_and_service_is_not_human_user() -> None:
     )
     require_service_health_agent(service)
     with pytest.raises(IdentityError):
-        require_admin_operator(service, mfa_enabled=True)
+        require_admin_operator(service)
