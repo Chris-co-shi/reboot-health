@@ -22,6 +22,7 @@ from health_platform.modules.identity.application.ports import (
     AuthorizationGrant,
     AuthorizationGrantRepository,
     DeletionRequestRepository,
+    IdentityJob,
     IdentityUnitOfWork,
     JobRepository,
     MfaRepository,
@@ -239,20 +240,15 @@ class InMemoryAuthorizationGrantRepository(AuthorizationGrantRepository):
 
 class InMemoryJobRepository(JobRepository):
     def __init__(self) -> None:
-        self._jobs: list[dict[str, Any]] = []
+        self._jobs: dict[UUID, IdentityJob] = {}
 
     def add(
         self, job_id: UUID, user_id: UUID, kind: str, status: str, payload: dict[str, str]
     ) -> None:
-        self._jobs.append(
-            {
-                "job_id": job_id,
-                "user_id": user_id,
-                "kind": kind,
-                "status": status,
-                "payload": payload,
-            }
-        )
+        self._jobs[job_id] = IdentityJob(job_id, user_id, kind, status, dict(payload))
+
+    def get(self, job_id: UUID) -> IdentityJob | None:
+        return self._jobs.get(job_id)
 
 
 class InMemoryDeletionRequestRepository(DeletionRequestRepository):

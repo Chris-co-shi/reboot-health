@@ -131,6 +131,7 @@ class IdentityService:
     def _read(self, body):
         """只读路径；UoW 不强制 commit，由实现决定。"""
         with self._uow_factory() as uow:
+            uow.set_security_context(None, "BACKGROUND")
             return body(uow)
 
     def _audit(
@@ -219,7 +220,7 @@ class IdentityService:
         def body(uow: IdentityUnitOfWork) -> None:
             uow.oauth_clients.upsert(client)
 
-        self._write("service", None, body)
+        self._write("background", None, body)
 
     def ensure_oauth_clients(self, clients: list[OAuthClient]) -> None:
         """Composition Root 启动幂等注入第一方 Client；多 Pod 并发安全。"""
@@ -228,7 +229,7 @@ class IdentityService:
             for client in clients:
                 uow.oauth_clients.upsert(client)
 
-        self._write("service", None, body)
+        self._write("background", None, body)
 
     def authorize(
         self,

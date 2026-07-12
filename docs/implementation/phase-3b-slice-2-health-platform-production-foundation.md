@@ -185,4 +185,15 @@ Mypy 清零与验收收口（2026-07-12，本轮）：
 - 新增 Alembic `20260712_0002`：`audit.chain_heads` 与批准角色数据库约束；未修改 0001。
 - `SqlAuditRepository` 使用 `SELECT FOR UPDATE` 锁定链头，事件与链头同事务更新；新增回滚一致性 PG 测试。
 - 验证：Ruff、Mypy 通过；非 PG **34 passed, 5 deselected**。PG **5 errors**，均在 PostgreSQL 启动前失败于 Testcontainers Reaper 8080 端口映射探测，未得到真实数据库结果。
-- 仍缺全部 Identity SQL Repository、生产 UoW/Composition Root、管理员 Application Use Case、SMTP Processor、OTel、完整 OAuth/MFA/限流与附件要求的 PG 并发矩阵，因此状态保持 `IN_PROGRESS`。
+- 当时仍缺全部 Identity SQL Repository、生产 UoW/Composition Root、管理员 Application Use Case、SMTP Processor、OTel、完整 OAuth/MFA/限流与附件要求的 PG 并发矩阵；其中 SQL Foundation 已由下节完成，Slice 总状态仍为 `IN_PROGRESS`。
+
+## Identity SQL Persistence and Production Composition Root（2026-07-12）
+
+- 完成 11 个 Identity Repository Port 的 SQL 实现和全部显式双向 Mapper；未知角色与不兼容 OAuth 配置 fail-closed。
+- 新增 `SqlAlchemyIdentityUnitOfWork`，统一 Identity/Audit/Outbox 事务、RLS 上下文和 after-commit hooks。
+- 新增 0003 migration：`authorization_grants`、`deletion_requests`、全部 Identity 表 FORCE RLS 与主体 Policy；保持单一 Head，未修改 0001/0002。
+- production Composition Root 已装配 PostgreSQL、版本化加密、OIDC key、可选 Redis Cache、Email Port 和 SQL IdentityService；local/test 保留显式 InMemory。
+- `/health/ready` 检查 PostgreSQL、代码单 Head 与 DB revision；不修改 Schema，响应不泄露 URL、SQL 或凭据。
+- PostgreSQL fixture 优先安全校验后的 `TEST_DATABASE_URL`，回退 PostgreSQL 17-alpine 一次性容器；本轮环境为 PostgreSQL 17.10。
+- 验证结果：非 PG 40 passed；PG 13 passed；全量 53 passed；coverage 91.03%；Ruff/Mypy/Bandit/pip-audit 通过；Alembic current/head 均为 20260712_0003。
+- 仍未完成：管理员 Application Use Case、完整 Refresh 并发/重放、MFA disable/reset、安全问题、Client Credentials、完整限流、SMTP Processor、OTel。Slice 2 保持 `IN_PROGRESS`。

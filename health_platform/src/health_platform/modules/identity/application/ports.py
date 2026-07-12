@@ -88,6 +88,20 @@ class AuthorizationGrant:
     consumed_at: datetime | None = None
 
 
+@dataclass
+class IdentityJob:
+    """Identity 范围后台任务；不代表其他业务模块已完成。"""
+
+    id: UUID
+    user_id: UUID
+    kind: str
+    status: str
+    payload: dict[str, str] = field(default_factory=dict)
+    created_at: datetime | None = None
+    ready_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
 # -----------------------------
 # Audit / Outbox 端口
 # -----------------------------
@@ -201,6 +215,7 @@ class JobRepository(Protocol):
     def add(
         self, job_id: UUID, user_id: UUID, kind: str, status: str, payload: dict[str, str]
     ) -> None: ...
+    def get(self, job_id: UUID) -> IdentityJob | None: ...
 
 
 @runtime_checkable

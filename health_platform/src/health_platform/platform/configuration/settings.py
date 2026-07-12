@@ -19,16 +19,21 @@ class Settings(BaseSettings):
 
     environment: Literal["local", "test", "staging", "production"] = "local"
     service_name: str = "health-platform"
-    database_url: str = "postgresql+psycopg://postgres:postgres@localhost/reboot_health"
+    database_url: str | None = None
     redis_url: str | None = None
     redis_enabled: bool = False
     token_pepper: SecretStr = Field(default=SecretStr("local-test-token-pepper"))
     encryption_key_file: str | None = None
+    encryption_current_key_version: str | None = None
     oidc_private_key_file: str | None = None
     oidc_previous_public_key_file: str | None = None
     oidc_current_kid: str = "local-current"
     oidc_previous_kid: str | None = None
     issuer: str = "http://localhost:8000/api/v1"
+    oauth_first_party_client_id: str | None = None
+    oauth_first_party_redirect_uris: tuple[str, ...] = ()
+    oauth_first_party_scopes: tuple[str, ...] = ("openid", "profile", "account:read")
+    oauth_first_party_audience: str = "health-platform-api"
     access_token_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     refresh_token_ttl_seconds: int = Field(default=2_592_000, ge=3600)
     verification_token_ttl_seconds: int = Field(default=1800, ge=300, le=86_400)
@@ -47,10 +52,20 @@ class Settings(BaseSettings):
     def validate_production_secrets(self) -> "Settings":
         """保证生产环境不会误用仅为本地测试准备的默认 Secret。"""
         if self.environment == "production":
+            if not self.database_url or not self.database_url.startswith(
+                ("postgresql+psycopg://", "postgresql://")
+            ):
+                raise ValueError("production requires an explicit PostgreSQL database URL")
             if self.token_pepper.get_secret_value() == "local-test-token-pepper":
                 raise ValueError("production requires an explicit token pepper")
-            if not self.encryption_key_file or not self.oidc_private_key_file:
+            if (
+                not self.encryption_key_file
+                or not self.encryption_current_key_version
+                or not self.oidc_private_key_file
+            ):
                 raise ValueError("production requires mounted encryption and signing keys")
+            if not self.oauth_first_party_client_id or not self.oauth_first_party_redirect_uris:
+                raise ValueError("production requires first-party OAuth client configuration")
         return self
 
     def safe_summary(self) -> dict[str, object]:

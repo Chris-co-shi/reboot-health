@@ -21,5 +21,8 @@ modules/identity/
   `platform/web/app.py` 仅保留 Composition Root、Probe、lifespan 与 `include_router`。
 - 全部路由路径、响应结构、状态码与 OpenAPI 与迁移前保持一致。
 - 首发人类角色已收敛为 `USER / ADMIN_OPERATOR`；`SERVICE_HEALTH_AGENT` 使用独立 Actor Kind；新增默认拒绝的 Principal Policy，管理员能力强制 MFA。
+- 全部 Identity Repository Port 已有显式 Domain/Row 双向 Mapper 和 SQL 实现；生产使用 `SqlAlchemyIdentityUnitOfWork`，Audit/Outbox 与身份状态同事务。
+- production Composition Root 不再回退 InMemory；关键数据库、密钥、签名与第一方 OAuth 配置缺失时 fail-closed。
+- readiness 验证 PostgreSQL 连接、单 Alembic Head 与当前 revision；不执行 migration 或 `create_all`。
 
-未完成（参见 Slice 2 完成记录）：全部 SQL Repository 与生产 UoW/Composition Root、管理员 Application Use Case、OAuthLib/Client Credentials 完整闭环、Redis IP/设备限流、MFA 关闭/重置、SMTP Outbox Processor、OTel instrumentation。
+未完成（参见 Slice 2 完成记录）：管理员 Application Use Case、完整 Refresh 并发/重放、OAuthLib/Client Credentials 完整闭环、Redis IP/设备限流、MFA 关闭/重置、SMTP Outbox Processor、OTel instrumentation。

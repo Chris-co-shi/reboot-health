@@ -10,3 +10,4 @@
 - 顶层 `health_platform.{adapters,application,domain,interfaces,ports}` 空骨架已删除；SKELETON 模块的占位子包已删除并合并通用骨架规则至 `modules/AGENTS.md`。
 - `identity` 与 `audit` 模块保留各自专属的 `domain / application / adapters / ports / interfaces` 五层结构。
 - Identity 首发人类角色为 `USER / ADMIN_OPERATOR`，服务主体通过 Principal Actor Kind 表达；Audit 使用持久 `chain_heads` 行锁防止并发分叉。两者仍为 `PARTIAL`。
+- Identity 当前全部 Repository Port 已有显式 SQL Mapper/Repository，并由生产 SQLAlchemy UoW 装配；`platform/web` 在 production 只使用 PostgreSQL，local/test 可显式使用 InMemory。

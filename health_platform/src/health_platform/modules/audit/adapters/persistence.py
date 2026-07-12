@@ -100,33 +100,59 @@ class SqlAuditRepository:
             .with_for_update()
         ).scalar_one()
         object.__setattr__(event, "previous_hash", head.current_hash)
-        self._session.add(
-            AuditEventRow(
-                event_id=event.event_id,
-                occurred_at=event.occurred_at,
-                actor_type=event.actor_type,
-                actor_id=event.actor_id,
-                user_id=event.user_id,
-                action=event.action,
-                resource_type=event.resource_type,
-                resource_id=event.resource_id,
-                result=event.result,
-                reason=event.reason,
-                trace_id=event.trace_id,
-                request_id=event.request_id,
-                source_ip=event.source_ip,
-                user_agent=event.user_agent,
-                event_metadata=event.metadata,
-                previous_hash=event.previous_hash,
-                event_hash=event.event_hash,
-            )
-        )
+        self._session.add(self.to_row(event))
         head.current_hash = event.event_hash
         head.updated_at = event.occurred_at
         return event.event_hash
 
     def entries(self) -> list[AuditEvent]:
         return []
+
+    @staticmethod
+    def to_row(event: AuditEvent) -> AuditEventRow:
+        return AuditEventRow(
+            event_id=event.event_id,
+            occurred_at=event.occurred_at,
+            actor_type=event.actor_type,
+            actor_id=event.actor_id,
+            user_id=event.user_id,
+            action=event.action,
+            resource_type=event.resource_type,
+            resource_id=event.resource_id,
+            result=event.result,
+            reason=event.reason,
+            trace_id=event.trace_id,
+            request_id=event.request_id,
+            source_ip=event.source_ip,
+            user_agent=event.user_agent,
+            event_metadata=dict(event.metadata),
+            previous_hash=event.previous_hash,
+            event_hash=event.event_hash,
+        )
+
+    @staticmethod
+    def to_domain(row: AuditEventRow) -> AuditEvent:
+        event = AuditEvent(
+            event_id=row.event_id,
+            occurred_at=row.occurred_at,
+            actor_type=row.actor_type,
+            actor_id=row.actor_id,
+            user_id=row.user_id,
+            action=row.action,
+            resource_type=row.resource_type,
+            resource_id=row.resource_id,
+            result=row.result,
+            reason=row.reason,
+            trace_id=row.trace_id,
+            request_id=row.request_id,
+            source_ip=row.source_ip,
+            user_agent=row.user_agent,
+            metadata=dict(row.event_metadata),
+            previous_hash=row.previous_hash,
+        )
+        if event.event_hash != row.event_hash:
+            raise ValueError("audit event hash mismatch")
+        return event
 
     def enqueue(self, event: OutboxEvent) -> None:
         """与业务数据同事务写入待发布副作用。"""
@@ -153,10 +179,48 @@ class SqlOutboxRepository:
         self._session = session
 
     def enqueue(self, event: OutboxEvent) -> None:
-        SqlAuditRepository(self._session).enqueue(event)
+        self._session.add(self.to_row(event))
 
     def entries(self) -> list[OutboxEvent]:
         return []
+
+    @staticmethod
+    def to_row(event: OutboxEvent) -> OutboxEventRow:
+        return OutboxEventRow(
+            event_id=event.event_id,
+            event_type=event.event_type,
+            aggregate_type=event.aggregate_type,
+            aggregate_id=event.aggregate_id,
+            payload=dict(event.payload),
+            status=event.status.value,
+            created_at=event.created_at,
+            available_at=event.available_at,
+            attempt_count=event.attempt_count,
+            next_attempt_at=event.next_attempt_at,
+            locked_by=event.locked_by,
+            locked_until=event.locked_until,
+            published_at=event.published_at,
+            last_error=event.last_error,
+        )
+
+    @staticmethod
+    def to_domain(row: OutboxEventRow) -> OutboxEvent:
+        return OutboxEvent(
+            event_id=row.event_id,
+            event_type=row.event_type,
+            aggregate_type=row.aggregate_type,
+            aggregate_id=row.aggregate_id,
+            payload=dict(row.payload),
+            status=OutboxStatus(row.status),
+            created_at=row.created_at,
+            available_at=row.available_at,
+            attempt_count=row.attempt_count,
+            next_attempt_at=row.next_attempt_at,
+            locked_by=row.locked_by,
+            locked_until=row.locked_until,
+            published_at=row.published_at,
+            last_error=row.last_error,
+        )
 
     def recover_expired(self, now: datetime) -> int:
         """恢复锁租约过期的 PROCESSING，保证 Pod 崩溃后任务不会永久丢失。"""
