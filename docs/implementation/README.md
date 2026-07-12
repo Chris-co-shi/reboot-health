@@ -1,14 +1,16 @@
 # 实施规范索引
 
-本目录只保存已经在 [`../PHASE_STATUS.md`](../PHASE_STATUS.md) 中标记为 `READY` 或 `IN_PROGRESS` 的文件级实施规范。
+本目录保存已经批准的文件级实施规范及其完成记录；活动规范必须在 [`../PHASE_STATUS.md`](../PHASE_STATUS.md) 中标记为 `READY` 或 `IN_PROGRESS`。
 
 ## 当前状态
 
 ```text
 Architecture：FROZEN
-Active implementation phase：NONE
+Active implementation phase：Phase 3B
 Active implementation spec：NONE
 ```
+
+- [`phase-3b-slice-1-repository-restructure.md`](phase-3b-slice-1-repository-restructure.md)：`DONE`
 
 Phase 1–2C 的临时实施规范已从当前树删除。其完成证据已经汇总到 `PHASE_STATUS.md`，详细历史仍可通过 Git 记录追溯。
 

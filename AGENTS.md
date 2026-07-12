@@ -12,7 +12,7 @@
 ```text
 Architecture Status：FROZEN
 Frozen At：2026-07-12
-Active Implementation Phase：NONE
+Active Implementation Phase：Phase 3B（当前无活动 Slice）
 ```
 
 自冻结日起，项目唯一事实来源是 [`docs/README.md`](docs/README.md) 中列出的权威文档。
@@ -69,7 +69,10 @@ Mini Program / Flutter / Vue Admin
 
 当前 CLI/JSON Store 是迁移基础，不是生产目标架构。
 
-`backend/`、`clients/flutter/`、`frontend/`、`deploy/` 是 legacy/迁移参考，不得描述为当前正式链路，也不得在未批准迁移/删除 Slice 中扩展或删除。
+- `health_platform/` 是 Phase 3B 建立的框架无关 Python 业务平台骨架，尚未实现业务能力。
+- `clients/flutter/` 是正式用户客户端空壳，`clients/miniapp/` 是正式用户客户端边界占位。
+- `frontend/` 是正式 Vue 3 Admin 空壳，`deploy/` 是 Kubernetes 目标目录占位。
+- `contracts/` 是未来可机读跨服务合同的共享目录，当前权威语义仍来自 `docs/API_CONTRACTS.md`。
 
 ## 6. 任务准入
 

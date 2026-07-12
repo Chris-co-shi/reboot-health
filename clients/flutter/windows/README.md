@@ -7,16 +7,15 @@
 
 </div>
 
-> 当前目录只是 M2.5-A 的平台占位，**不包含可构建的 Windows native runner**。
+> 当前目录保留 Flutter Windows 工程基础；Windows 不是当前正式用户客户端交付目标。
 
-## Generate
+## Verify
 
 在 Windows 开发机安装 Flutter SDK 与 Visual Studio Desktop C++ workload 后，从 `clients/flutter` 执行：
 
 ```powershell
-flutter create --platforms=windows .
 flutter doctor -v
 flutter build windows --debug
 ```
 
-macOS 环境不能替代真实 Windows 构建验收。完成后应删除本占位说明，并更新 [`../README.md`](../README.md)。
+macOS 环境不能替代真实 Windows 构建验收。

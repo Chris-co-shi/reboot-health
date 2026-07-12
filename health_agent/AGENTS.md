@@ -19,7 +19,7 @@
 → 当前 implementation 规范
 ```
 
-当前没有活动 implementation 规范，因此禁止直接开始 Phase 3B+ 业务代码。
+当前 Phase 3B Slice 1 只允许调整定位文档；禁止改动 `agent/**`、`tests/**` 或提前实现 Phase 3C+ 能力。
 
 ## 2. 已实现事实
 

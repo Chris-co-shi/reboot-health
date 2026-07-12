@@ -7,16 +7,15 @@
 
 </div>
 
-> 当前目录只是 M2.5-A 的平台占位，**不包含可构建的 iOS native runner**。
+> 当前目录保留 Flutter iOS 工程基础；真实构建能力以本 Slice 的验证记录为准。
 
-## Generate
+## Verify
 
 在安装 Flutter SDK、Xcode 和 CocoaPods 后，从 `clients/flutter` 执行：
 
 ```bash
-flutter create --platforms=ios .
 flutter doctor -v
 flutter build ios --debug --no-codesign
 ```
 
-完成后应删除本占位说明，并检查 Keychain、entitlements 与签名配置，再更新 [`../README.md`](../README.md)。
+正式能力必须只调用 Health Platform，并检查 Keychain、entitlements 与签名配置。

@@ -14,7 +14,7 @@ Phase 2C Interactive Session：DONE
 Architecture Freeze：FROZEN
 ```
 
-后续路线以 [`../docs/PHASE_STATUS.md`](../docs/PHASE_STATUS.md) 为准。当前没有活动实现 Slice。
+后续路线以 [`../docs/PHASE_STATUS.md`](../docs/PHASE_STATUS.md) 为准。Phase 3B Slice 1 仅完成仓库重组和服务定位，不改变 Runtime 行为。
 
 ## 已实现能力
 
@@ -122,4 +122,4 @@ python3 -m unittest tests.test_orphan_pending_actions -v
 
 ## 开发规则
 
-读取 [`AGENTS.md`](AGENTS.md)。没有 `READY` implementation 规范时禁止实现 Phase 3B+ 能力。
+读取 [`AGENTS.md`](AGENTS.md)。没有对应 `READY`/`IN_PROGRESS` implementation 规范时禁止实现后续能力。

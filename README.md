@@ -6,7 +6,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![Architecture](https://img.shields.io/badge/Architecture-FROZEN-6C5CE7)
-![Phase](https://img.shields.io/badge/Phase-3A%20Frozen-00B894)
+![Phase](https://img.shields.io/badge/Phase-3B%20In%20Progress-00B894)
 
 </div>
 
@@ -21,7 +21,8 @@ Phase 2B Runtime state/recovery/JSON safety foundation：DONE_EXPLICIT
 Phase 2C Interactive Session：DONE
 Phase 3A Architecture Freeze：FROZEN
 
-Active implementation phase：NONE
+Phase 3B：IN_PROGRESS
+Phase 3B Slice 1：DONE
 ```
 
 2026-07-12 已完成架构冻结。未来代码、测试、部署和 Agent 提示词必须以 [`docs/`](docs/README.md) 为唯一事实来源。
@@ -46,6 +47,20 @@ Active implementation phase：NONE
 - **Kubernetes**：3 Control Plane + 3 Worker VM，全部组件运行在 K8s 内。
 
 详细规则见 [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)。
+
+## Current repository structure
+
+| 路径 | 当前真实状态 |
+|---|---|
+| [`health_platform/`](health_platform/README.md) | Python 框架无关骨架；业务尚未实现 |
+| [`health_agent/`](health_agent/README.md) | Phase 1–2C 已验证 Runtime；生产 API/Worker 尚未实现 |
+| [`clients/flutter/`](clients/flutter/README.md) | 正式用户客户端空壳 |
+| [`clients/miniapp/`](clients/miniapp/README.md) | 正式用户客户端目录与边界占位 |
+| [`frontend/`](frontend/README.md) | Vue 3 正式管理端空壳 |
+| [`contracts/`](contracts/README.md) | 跨服务可机读合同的未来共享目录 |
+| [`deploy/`](deploy/README.md) | Kubernetes 目标目录占位；尚无可运行配置 |
+
+这些骨架和占位目录不代表 Health Platform、客户端业务、管理功能或 Kubernetes 部署已经完成。
 
 ## Current implemented runtime
 
@@ -130,6 +145,6 @@ JSON Store 是本地明文，只适合受控开发环境。
 
 没有 READY Slice 时禁止开始业务代码实现。
 
-## Legacy
+## Implementation status
 
-`backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 是 legacy/迁移参考，不是当前正式运行链路。关键 PlanVersion、revision、幂等和审计语义完成迁移并验收前，不凭判断直接删除 legacy 代码。
+Phase 3B Slice 1 已完成仓库重组与 legacy 清理，完成记录见 [`docs/implementation/phase-3b-slice-1-repository-restructure.md`](docs/implementation/phase-3b-slice-1-repository-restructure.md)。Phase 3B 保持 `IN_PROGRESS`；后续业务、API、数据库和部署实现仍必须逐 Slice 批准。

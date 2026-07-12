@@ -8,9 +8,6 @@
 !.env.example
 deploy/.env
 
-# Java / Maven
-backend/target/
-
 # Node / pnpm
 frontend/node_modules/
 frontend/dist/
@@ -23,11 +20,19 @@ clients/flutter/.flutter-plugins
 clients/flutter/.flutter-plugins-dependencies
 clients/flutter/.packages
 
-# Python
-agent-runtime/.venv/
-agent-runtime/__pycache__/
-agent-runtime/.pytest_cache/
-agent-runtime/**/*.pyc
+# Python health-agent
+health_agent/.venv/
+health_agent/**/__pycache__/
+health_agent/.pytest_cache/
+health_agent/**/*.pyc
+health_agent/runtime-state/
+runtime-state/
+
+# Python Health Platform
+health_platform/.venv/
+health_platform/**/__pycache__/
+health_platform/.pytest_cache/
+health_platform/**/*.pyc
 
 # IDE
 .idea/

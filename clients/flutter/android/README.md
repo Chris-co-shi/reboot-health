@@ -7,16 +7,15 @@
 
 </div>
 
-> 当前目录只是 M2.5-A 的平台占位，**不包含可构建的 Android native runner**。
+> 当前目录保留 Flutter Android 工程基础；真实构建能力以本 Slice 的验证记录为准。
 
-## Generate
+## Verify
 
 在安装 Flutter SDK 和 Android toolchain 后，从 `clients/flutter` 执行：
 
 ```bash
-flutter create --platforms=android .
 flutter doctor -v
 flutter build apk --debug
 ```
 
-完成后应删除本占位说明，并以真实 runner 配置和构建结果更新 [`../README.md`](../README.md)。
+不得在 Runner 中直接接入 `health-agent` 或基础设施。

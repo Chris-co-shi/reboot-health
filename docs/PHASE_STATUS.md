@@ -26,8 +26,8 @@ Phase 2B：DONE_EXPLICIT
 Phase 2C：DONE
 Phase 3A Architecture Freeze：FROZEN
 
-当前活动代码 Phase：无
-下一步：基于冻结文档重新拆分并批准 Phase 3B 的第一个 Slice
+当前活动代码 Phase：Phase 3B
+当前活动 Slice：无；Slice 1 已完成，下一 Slice 尚未批准
 ```
 
 自 2026-07-12 起，旧的“Phase 3A 健康领域只读工具”路线废止，不得继续使用该名称实施代码。
@@ -155,7 +155,27 @@ Phase 3A 不修改业务代码、数据库 Schema 或部署清单。
 
 ### Phase 3B：仓库重组和服务骨架
 
-状态：`TODO`
+状态：`IN_PROGRESS`
+
+#### Slice 1：Repository Restructure and Legacy Removal
+
+状态：`DONE`
+
+Primary Module：仓库目录结构、Health Platform 骨架和 legacy 清理。
+
+实施规范：[`implementation/phase-3b-slice-1-repository-restructure.md`](implementation/phase-3b-slice-1-repository-restructure.md)
+
+完成记录：
+
+- 旧 Java 后端、Maven/Flyway、设备认证和旧 AgentRun 权威已删除。
+- Python Health Platform 框架无关骨架已建立；未实现业务、API 或数据库。
+- health-agent Phase 1–2C 代码与测试完整保留，376 项确定性测试通过，2 项显式真实 LLM 测试按设计跳过；专项多进程、lease、恢复和 orphan 测试通过。
+- Flutter 已成为只面向 Health Platform 的正式客户端空壳；`pub get`、`analyze` 和 1 项测试通过。
+- Vue 已成为正式 Admin Shell；锁文件安装、类型检查和构建通过。
+- 小程序、合同和 Kubernetes 目标目录已建立；旧 Compose 已删除。
+- Health Platform 编译通过；当前骨架没有单元测试用例。
+- 未执行真实 LLM、Kubernetes、数据库、Redis、MinIO 或端到端业务验收；均不属于本 Slice。
+- 未越过 Allowed Paths；未修改 `health_agent/agent/**` 或 `health_agent/tests/**`。
 
 目标：
 
@@ -268,7 +288,7 @@ Phase 3A 不修改业务代码、数据库 Schema 或部署清单。
 | 单物理 SSD | 接受；保留容量余量并持续告警 |
 | 无 NAS/云外部备份 | 接受先上线；管理端持续高风险提示 |
 | 医学阈值未专业审核 | 标记 `NEEDS_MEDICAL_REVIEW`，不得自行实现 |
-| legacy 代码仍存在 | 仅迁移参考；关键语义迁移后单独删除 |
+| Phase 3B Slice 1 legacy 清理 | Java 后端及其客户端/部署耦合已删除；骨架不等于业务完成 |
 | 当前 Runtime 是 CLI/JSON | 仅 Phase 1–2C 实现事实，不等于生产服务 |
 
 ## 7. 进入实施的强制条件

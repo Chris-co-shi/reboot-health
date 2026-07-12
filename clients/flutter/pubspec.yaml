@@ -1,5 +1,5 @@
 name: reboot_health
-description: Reboot Health Flutter client for personal health planning.
+description: Reboot Health official Flutter client shell.
 publish_to: "none"
 version: 0.1.0+1
 
@@ -9,8 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_secure_storage: ^10.3.1
-  http: ^1.2.2
 
 dev_dependencies:
   flutter_test:
