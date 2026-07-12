@@ -5,6 +5,7 @@
 | Feature | Module | Description | Status | API | Domain Object | Persistence | Security | Audit | Tests | Phase | Out of Scope |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 注册与账号 | identity | 邮箱/用户名、基础档案、唯一性 | PARTIAL | register/me | User | identity.users | Argon2id、规范化 | 是 | 单元/API/PG | 3B | 健康档案 |
+| Identity HTTP 拆分 | identity/platform | DTO/路由/principal 依赖从 platform/web/app.py 迁至 modules/identity/interfaces/http.py | PARTIAL | 接口迁移 | APIRouter | 无新增 Schema | OpenAPI 不变 | 是 | API | 3B | OAuth 闭环 |
 | 邮箱验证 | identity | 一次性短期哈希 Token | PARTIAL | verification | EmailVerification | identity.email_verifications | 高熵/轮换 | 是 | 单元/API | 3B | 邮件入站 |
 | 登录风控 | identity | 账号/IP/设备退避与锁定 | PARTIAL | login | LoginGuard | user/security event | Redis 降级 DB | 是 | 单元/API | 3B | 风险模型 |
 | OAuth/OIDC | identity | Code+PKCE、Client Credentials、Discovery/JWKS | PARTIAL | oauth/oidc | AuthorizationGrant | oauth tables | RS256/S256/nonce | 是 | API/security | 3B | 第三方平台 |

@@ -189,7 +189,41 @@ Primary Module：`health_platform`。
 
 当前证据：uv/Ruff/Mypy、30 项非 PostgreSQL 测试、85% 覆盖率、4 项真实 PostgreSQL 测试、Bandit、pip-audit 和 health-agent 376 项回归通过。
 
+本轮结构整改（在 IN_PROGRESS 内的范围收口）：
+
+- 顶层 5 个空骨架包 `health_platform.{adapters,application,domain,interfaces,ports}` 已删除。
+- `conversation / fact / goal / plan / risk / file / secret / agent_integration` 五个 SKELETON 模块的占位子包与重复 `AGENTS.md` 已删除；保留各模块 `README.md`；通用骨架规则汇总至 `modules/AGENTS.md`。
+- `identity` HTTP 接口已迁至 `modules/identity/interfaces/http.py`；`platform/web/app.py` 瘦化为 Composition Root。行为、路径、状态码、响应、OpenAPI 与迁移前一致。
+
+工具链恢复与验收（2026-07-10，本轮）：
+
+- Python：`/usr/local/bin/python3.12`（3.12.3）。uv：`brew install uv` 后 `/opt/homebrew/Cellar/uv/0.11.28`。
+- 工作目录：仓库根；命令：`uv sync --frozen --all-packages`；`uv.lock` 未修改（`--frozen`）。
+- `create_app().openapi()`：19 条路径全部存在且无重复前缀（含 Probe 3、Identity 13、OAuth 3、`.well-known` 2）；`TestClient` 异常响应与 Probe 均符合预期；Discovery/JWKS 含 RS256/S256 且公钥无 `d`。
+- `ruff check .` → `All checks passed!`。
+- `mypy` → 3 处报错：`platform/security/cache.py:15` 既有、`platform/web/app.py:91` 既有（`lifespan` 缺返回注解）、`platform/web/app.py:105` 新增遗留（`add_exception_handler ... IdentityError vs Exception` 不兼容签名）；本轮未消除。
+- `pytest -m "not postgres" -v` → **30 passed, 4 deselected**。
+- `pytest -m postgres -v` → Docker 已起 PostgreSQL 17-alpine 容器，但 Testcontainers `Reaper` 在 8080 端口注册失败（`ConnectionError: Port mapping ... is not available`），4 项 ERROR；环境端口限制，未在本环境通过，列为「环境失败」。
+- `cd health_agent && python -m unittest discover -s tests -v` → **Ran 376 tests in 3.180s OK (skipped=2)**，全部通过。
+- 调整点：`IdentityError` 处理器由 `APIRouter.add_exception_handler` 改为 `app.add_exception_handler(IdentityError, identity_error_handler)`；`identity_error_handler` 实现保留在 `modules/identity/interfaces/http.py`；同步删除 `http.py` 中的 `from __future__ import annotations`（FastAPI 0.139 + Pydantic 2.13 下阻止 OpenAPI 正确解析依赖类型）。
+
 未完成：生产 SQL Composition Root、OAuthLib/Client Credentials 完整闭环、完整限流/MFA/安全问题/权限用例、邮件 Outbox Processor、OTel 与数据库 readiness、剩余并发/审计集成测试。Slice 2 与 Phase 3B 继续保持 `IN_PROGRESS`。
+
+Mypy 清零与验收收口（2026-07-12，本轮）：
+
+- `IdentityError` 处理器签名收窄：本轮新增 `identity_exception_adapter(request, exc: Exception) -> JSONResponse`，内部 `isinstance(exc, IdentityError)` 收窄后调用 `identity_error_handler`；`app.add_exception_handler(IdentityError, identity_exception_adapter)` 注册；未引入 `type: ignore`，未依赖 `APIRouter.add_exception_handler`（未确认支持）。
+- `Redis` 泛型收窄 / `lifespan` 返回类型注解：本轮复核时 `mypy` 对 `platform/security/cache.py` 与 `platform/web/app.py` `lifespan` 已无报错（前次工具链恢复时的两条 mypy 报错在本轮重测中已不存在；按"只修复本次拆分导致的问题"原则，本轮未做与之相关的代码改动）。
+- `ruff format --check .` → `32 files already formatted`；`ruff check .` → `All checks passed!`。
+- `mypy health_platform/src/health_platform` → **Success: no issues found in 32 source files**（0 错误）。
+- `bandit -r health_platform/src/health_platform -q` → 无问题。
+- `pip-audit -r <dependencies.txt>` → **No known vulnerabilities found**。
+- `pytest -m "not postgres" -v` → **30 passed, 4 deselected**（与上轮一致，行为未变）。
+- `create_app()` 实例化：`openapi()["paths"]` 共 **19** 条 key；分类合计 **21** 条路由（Probe 3 + Identity 11 + OAuth 3 + `.well-known` 2）；OpenAPI 字典 19 条 = 21 − 2 是因为之前分类多加 2 条 Identity，本轮以字典实际条数为准（完整排序列表已写入 Slice 2 实施记录）。
+- `with TestClient(create_app()) as client:` 触发 lifespan：`/health/ready=200 {"status":"ready"}`、`/health/live=200`、`/health/startup=200`；`app.state.background` 线程 `health-platform-outbox` `is_alive=True`；退出 `with` 后 `threading.active_count()` 从 3 降到 1，后台线程已停止。上轮报告的 503 是因为 `TestClient(...)` 单独调用未进入 lifespan；谓词 `poll_once=lambda: False` 只表示无任务，不会让线程死亡。
+- `/api/v1/identity/login` → 401 `IDENTITY_INVALID_CREDENTIALS`；`/api/v1/oauth/token`（grant_type=client_credentials） → 400 `IDENTITY_UNSUPPORTED_GRANT`。响应字段 `error_code / message / trace_id / details` 稳定，无密码或 Token 泄露。
+- Testcontainers 端口发现异常：Docker/Reaper 容器能启动并完成端口映射，但 Testcontainers Python 客户端在 `Reaper._create_instance -> get_exposed_port(8080)` 返回空 `port_mappings`；`lsof -nP -iTCP:8080 -sTCP:LISTEN` 空、`docker ps` Reaper `Up 0.0.0.0:51671->8080/tcp` 正常。**根因尚未完全确认**——可能涉及本机 Docker daemon 配置、Testcontainers Ryuk 镜像协议、客户端版本兼容或端口探测实现；不属于业务代码问题。
+- PostgreSQL 集成测试保持 **BLOCKED（环境失败，非业务代码失败）**，不通过修改业务代码规避。
+- Slice 2 与 Phase 3B 仍保持 `IN_PROGRESS`，未描述 Identity 已完整生产化。
 
 目标：
 
