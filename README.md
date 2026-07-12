@@ -6,11 +6,11 @@
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![Architecture](https://img.shields.io/badge/Architecture-FROZEN-6C5CE7)
-![Phase](https://img.shields.io/badge/Phase-3B%20In%20Progress-00B894)
+![Phase](https://img.shields.io/badge/Phase-3%20Foundation%20%2F%204%20Discovery-00B894)
 
 </div>
 
-> 本项目不做医学诊断，不替代医生、急救服务或其他持证专业人士。
+> 本项目不做医学诊断，不替代医生、急救服务、营养师或其他持证专业人士。
 
 ## Current status
 
@@ -21,47 +21,61 @@ Phase 2B Runtime state/recovery/JSON safety foundation：DONE_EXPLICIT
 Phase 2C Interactive Session：DONE
 Phase 3A Architecture Freeze：FROZEN
 
-Phase 3B：IN_PROGRESS
-Phase 3B Slice 1：DONE
-Phase 3B Slice 2：IN_PROGRESS
+Phase 3：IN_PROGRESS
+- 当前活动 Slice：Health Platform Production Foundation and Identity
+- 目标边界：生产基础、Identity、用户归属授权、服务间授权、生产 Agent Runtime 和安全验收
+
+Phase 4：DISCOVERY
+- 目标边界：Fact、Goal、HealthProgram、训练、恢复、饮食、执行反馈、调整、风险、提醒和 Web 用户闭环
+- 任何 Phase 4 Slice 尚未 READY
 ```
 
-2026-07-12 已完成架构冻结。未来代码、测试、部署和 Agent 提示词必须以 [`docs/`](docs/README.md) 为唯一事实来源。
+2026-07-12 已完成架构冻结，并通过 ADR 0023 重划 Phase 3/Phase 4 边界。未来代码、测试、部署和 Agent 提示词必须以 [`docs/`](docs/README.md) 为唯一事实来源。
 
 ## Frozen target architecture
 
 ```text
-微信小程序 / Flutter / Vue Admin
-              ↓
-        Health Platform
-              ↓  mTLS + short-lived JWT
-          health-agent
-              ↓
- Model Provider / Tool / Sandbox / RAG / Sub-Agent
+Web 用户端 / 微信小程序 / Flutter / Vue Admin
+                     ↓
+               Health Platform
+                     ↓  mTLS + short-lived JWT
+                 health-agent
+                     ↓
+        Model Provider / Tool / Sandbox / RAG / Sub-Agent
 ```
 
-- **Health Platform**：用户身份、Conversation、Fact、Plan、Risk、File、Secret、审计和正式 API 的唯一权威。
+- **Health Platform**：用户身份、Conversation、Fact、Goal、HealthProgram、Plan、Risk、File、Secret、审计和正式 API 的唯一权威。
 - **health-agent**：Task/Run/Step、模型、Tool、Checkpoint、RAG、Sub-Agent、Sandbox 和执行可观测性。
 - **PostgreSQL**：业务和执行权威持久化。
 - **Redis Streams**：调度和协调加速，不是事实源。
 - **MinIO**：第一版 ObjectStorageProvider。
-- **Kubernetes**：3 Control Plane + 3 Worker VM，全部组件运行在 K8s 内。
+- **Kubernetes**：目标拓扑为 3 Control Plane + 3 Worker VM，全部组件运行在 K8s 内。
 
-详细规则见 [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)。
+客户端顺序：
+
+- `clients/web/`：Phase 4 规划中的首个普通用户验证入口。
+- `frontend/`：Vue 3 管理、运维、诊断和审计端。
+- `clients/miniapp/`：Web 闭环稳定后的用户入口。
+- `clients/flutter/`：Web 闭环稳定后的用户入口。
+
+任何客户端均只访问 Health Platform。
+
+详细规则见 [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md)、[`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) 和 [`docs/PHASE_4_BASELINE.md`](docs/PHASE_4_BASELINE.md)。
 
 ## Current repository structure
 
 | 路径 | 当前真实状态 |
 |---|---|
-| [`health_platform/`](health_platform/README.md) | Python 框架无关骨架；业务尚未实现 |
-| [`health_agent/`](health_agent/README.md) | Phase 1–2C 已验证 Runtime；生产 API/Worker 尚未实现 |
-| [`clients/flutter/`](clients/flutter/README.md) | 正式用户客户端空壳 |
-| [`clients/miniapp/`](clients/miniapp/README.md) | 正式用户客户端目录与边界占位 |
-| [`frontend/`](frontend/README.md) | Vue 3 正式管理端空壳 |
+| [`health_platform/`](health_platform/README.md) | Python 模块化单体生产基础与 Identity 正在实施；健康业务尚未实现 |
+| [`health_agent/`](health_agent/README.md) | Phase 1–2C 已验证 Runtime；生产 API/Worker 和 PostgreSQL 执行存储尚未实现 |
+| `clients/web/` | Phase 4 规划目录；当前尚未创建 |
+| [`clients/flutter/`](clients/flutter/README.md) | 正式用户客户端空壳；Phase 4 Web 闭环稳定后接入 |
+| [`clients/miniapp/`](clients/miniapp/README.md) | 正式用户客户端目录与边界占位；Phase 4 Web 闭环稳定后接入 |
+| [`frontend/`](frontend/README.md) | Vue 3 正式管理端空壳，不承担普通用户健康业务 |
 | [`contracts/`](contracts/README.md) | 跨服务可机读合同的未来共享目录 |
 | [`deploy/`](deploy/README.md) | Kubernetes 目标目录占位；尚无可运行配置 |
 
-这些骨架和占位目录不代表 Health Platform、客户端业务、管理功能或 Kubernetes 部署已经完成。
+这些骨架和占位目录不代表 Health Platform 健康业务、客户端业务、管理功能或 Kubernetes 部署已经完成。
 
 ## Current implemented runtime
 
@@ -117,7 +131,8 @@ JSON Store 是本地明文，只适合受控开发环境。
 
 | 文档 | 内容 |
 |---|---|
-| [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) | 产品、客户端、Fact、Plan、风险和文件要求 |
+| [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) | 产品、客户端、Fact、HealthProgram、Plan、风险和文件要求 |
+| [`docs/PHASE_4_BASELINE.md`](docs/PHASE_4_BASELINE.md) | 已确认的 Phase 4 产品范围与最终验收方向；当前不是实施规范 |
 | [`docs/SYSTEM_ARCHITECTURE.md`](docs/SYSTEM_ARCHITECTURE.md) | 双服务、异步执行、事件、RAG 和 Sub-Agent |
 | [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md) | 领域模型和数据权威 |
 | [`docs/STATE_MACHINES.md`](docs/STATE_MACHINES.md) | 状态和合法转换 |
@@ -148,4 +163,6 @@ JSON Store 是本地明文，只适合受控开发环境。
 
 ## Implementation status
 
-Phase 3B Slice 1 已完成仓库重组。Slice 2 正在建立 Health Platform 生产基础与 Identity，当前仍有生产 SQL Composition Root、完整 OAuth/Identity 和运行集成缺口；详见 [`docs/implementation/phase-3b-slice-2-health-platform-production-foundation.md`](docs/implementation/phase-3b-slice-2-health-platform-production-foundation.md)。
+当前活动工作仍属于 Phase 3 的 Health Platform Production Foundation and Identity。生产 SQL Composition Root、完整 OAuth/Identity、权限用例和运行集成仍有缺口。
+
+Phase 4 只完成了产品与阶段治理重基线，状态为 `DISCOVERY`。不得把 `PHASE_4_BASELINE.md` 或目录占位描述成业务已实现。
