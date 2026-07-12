@@ -9,7 +9,7 @@
 
 </div>
 
-> ADR 记录重大决策及其演进。当前有效产品和工程规则仍必须同步体现在 `docs/` 权威文档中。历史 ADR 不能覆盖 2026-07-12 冻结文档。
+> ADR 记录重大决策及其演进。当前有效产品和工程规则仍必须同步体现在 `docs/` 权威文档中。历史 ADR 不能覆盖当前已经批准的权威文档和后续替代 ADR。
 
 ## Decision index
 
@@ -37,6 +37,7 @@
 | [0020](0020-identity-oauth-oidc-and-session-security.md) | Identity、OAuth/OIDC 与 Session 安全 | 已确认 | 不透明用户 Token、PKCE、RS256、MFA、设备会话与恢复闭环 |
 | [0021](0021-health-platform-cache-background-and-observability.md) | 缓存、后台处理与可观测性 | 已确认 | PostgreSQL 权威、Redis 降级、Outbox 线程、OTel 与 Probe |
 | [0022](0022-first-release-principal-and-rbac.md) | 首发主体与 RBAC | 已确认 | 人类仅 USER/ADMIN_OPERATOR；SERVICE_HEALTH_AGENT 是服务主体 |
+| [0023](0023-phase-3-security-foundation-and-phase-4-health-program.md) | Phase 3 安全底座与 Phase 4 综合健康闭环 | 已确认 | Phase 3 收敛生产与权限底座；Fact/Goal/训练/恢复/饮食/反馈调整统一进入 Phase 4；Web 为首个用户验证入口 |
 
 ## Status rules
 
