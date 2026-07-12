@@ -7,10 +7,11 @@
 ```text
 Architecture：FROZEN
 Active implementation phase：Phase 3B
-Active implementation spec：NONE
+Active implementation spec：Phase 3B Slice 2
 ```
 
 - [`phase-3b-slice-1-repository-restructure.md`](phase-3b-slice-1-repository-restructure.md)：`DONE`
+- [`phase-3b-slice-2-health-platform-production-foundation.md`](phase-3b-slice-2-health-platform-production-foundation.md)：`IN_PROGRESS`
 
 Phase 1–2C 的临时实施规范已从当前树删除。其完成证据已经汇总到 `PHASE_STATUS.md`，详细历史仍可通过 Git 记录追溯。
 

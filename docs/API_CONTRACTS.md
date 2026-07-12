@@ -420,3 +420,40 @@ INTERNAL_ERROR
 - Secret、Token 或签名内部材料。
 - 其他用户 ID 和内容。
 - 后端堆栈和基础设施拓扑细节。
+
+## 12. Health Platform `/api/v1` Identity 合同
+
+ADR 0020 批准 Identity API 使用 `/api/v1`、snake_case、RFC3339 UTC 和资源 DTO 直返；本节在该命名空间内取代第 1 节旧统一外壳，内部 Agent 合同不变。
+
+错误模型：
+
+```json
+{"error_code":"IDENTITY_INVALID_CREDENTIALS","message":"账号或密码错误","trace_id":"...","details":{}}
+```
+
+主要端点：
+
+```text
+POST /api/v1/identity/register
+POST /api/v1/identity/login
+GET  /api/v1/identity/me
+POST /api/v1/identity/email-verifications
+POST /api/v1/identity/email-verifications/confirm
+GET  /api/v1/identity/sessions
+POST /api/v1/identity/sessions/{id}/revoke
+POST /api/v1/oauth/authorize
+POST /api/v1/oauth/token
+POST /api/v1/oauth/revoke
+GET  /api/v1/.well-known/openid-configuration
+GET  /api/v1/.well-known/jwks.json
+POST /api/v1/identity/mfa/totp/enroll
+POST /api/v1/identity/mfa/totp/confirm
+POST /api/v1/identity/mfa/recover
+POST /api/v1/identity/password-recovery
+POST /api/v1/identity/password-recovery/complete
+POST /api/v1/identity/exports
+POST /api/v1/identity/deletion-requests
+POST /api/v1/identity/deletion-requests/{id}/cancel
+```
+
+用户 Access/Refresh Token 不透明且可撤销；OAuth 支持 Authorization Code + S256 PKCE、Refresh Token、Revocation、Client Credentials 和 OIDC Discovery/JWKS/RS256 ID Token。写入按风险使用 `Idempotency-Key`，可修改资源使用 ETag/If-Match。

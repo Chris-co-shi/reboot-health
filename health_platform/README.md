@@ -4,7 +4,7 @@
 
 微信小程序、Flutter 和 Vue Admin 只能访问 Health Platform。Health Platform 通过内部 HTTPS、mTLS 和短期 JWT 调用 `health-agent`；`health-agent` 不得直接连接 Platform 数据库。
 
-当前目录只是 Phase 3B 的框架无关 Python 服务骨架。尚未实现业务对象、Web 框架、数据库、Redis、对象存储、REST Endpoint 或生产部署能力。
+Phase 3B Slice 2 已建立 FastAPI、Identity 领域/API 基础、SQLAlchemy/Alembic、Audit/Outbox、缓存/加密/邮件适配器、后台线程和测试基线。生产 SQL Composition Root 与完整 OAuth/Identity 运行集成仍在实施，不能描述为生产完成。
 
 ## 包边界
 
@@ -22,6 +22,8 @@ src/health_platform/
 ## 验证
 
 ```bash
-python3 -m compileall src tests
-python3 -m unittest discover -s tests -v
+uv run uvicorn health_platform.platform.web.app:app --app-dir health_platform/src
+uv run pytest health_platform/tests -v
+uv run ruff check .
+uv run mypy health_platform/src
 ```

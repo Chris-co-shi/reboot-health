@@ -428,3 +428,15 @@ createdAt
 - MinIO object metadata 代替 Platform FileAsset。
 - Redis 状态代替 PostgreSQL Task/Run 权威。
 - 前端本地状态代替服务端 revision 和确认记录。
+
+## 15. Identity、Audit 与后台对象
+
+- `UserAccount`：邮箱/用户名规范化标识、展示名、状态、邮箱验证、权限版本和锁定信息。
+- `IdentitySession`：一次设备登录，绑定客户端、设备摘要、最近活动与撤销时间。
+- `TokenFamily` / `RefreshToken`：每设备独立轮换链；旧 Token 重放撤销整个 Family。
+- `EmailVerification` / `PasswordRecovery` / `AuthorizationCode`：短期、一次性，数据库只保存 Token 哈希。
+- `MfaEnrollment` / `RecoveryCode`：TOTP Secret 加密，恢复码哈希且一次性。
+- `RoleAssignment` / `RelationshipGrant`：RBAC 与资源关系授权基础。
+- `AuditEvent`：只追加、前一哈希连接，不记录 Secret 或完整敏感内容。
+- `OutboxEvent`：PENDING/PROCESSING/PUBLISHED/FAILED，支持锁租约、退避、恢复和幂等事件 ID。
+- `ExportJob` / `AccountDeletionRequest`：Identity 范围任务；跨模块导出/删除由后续模块扩展，不能伪造完成。

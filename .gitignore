@@ -33,6 +33,9 @@ health_platform/.venv/
 health_platform/**/__pycache__/
 health_platform/.pytest_cache/
 health_platform/**/*.pyc
+health_platform/.coverage
+.coverage
+.venv/
 
 # IDE
 .idea/

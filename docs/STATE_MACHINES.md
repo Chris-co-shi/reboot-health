@@ -314,3 +314,18 @@ STARTED
 - `REPLAY_EVENT`：重发 Outbox 或拉取对账。
 
 管理员不能直接修改终态、Fact、Plan、RiskAcknowledgement 或用户确认记录。
+
+## 19. Identity 状态机
+
+```text
+User: PENDING_VERIFICATION → ACTIVE → DISABLED / DELETION_PENDING → DELETED
+Session: ACTIVE → REVOKED / EXPIRED
+TokenFamily: ACTIVE → REVOKED / REPLAY_COMPROMISED
+EmailVerification: PENDING → CONSUMED / SUPERSEDED / EXPIRED
+PasswordRecovery: PENDING_EMAIL → EMAIL_VERIFIED → READY → CONSUMED / EXPIRED
+MFA: DISABLED → PENDING_CONFIRMATION → ENABLED → DISABLED
+DeletionRequest: COOLING_OFF → CANCELLED / READY → PROCESSING → COMPLETED / FAILED
+Outbox: PENDING → PROCESSING → PUBLISHED / FAILED → PENDING
+```
+
+Refresh Token 轮换必须原子消费旧 Token 并创建新 Token；检测已消费 Token 时不得继续刷新，必须撤销 Family并审计。账号禁用、密码变更和删除申请必须按合同撤销 Session/Token。

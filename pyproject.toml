@@ -1,0 +1,27 @@
+[tool.uv.workspace]
+members = ["health_agent", "health_platform"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[dependency-groups]
+dev = [
+  "bandit>=1.8,<2",
+  "mypy>=1.14,<2",
+  "pip-audit>=2.8,<3",
+  "pytest>=9.0.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+  "testcontainers[postgres]>=4.9,<5",
+  "types-oauthlib>=3.2,<4",
+  "types-redis>=4.6,<5",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["health_agent"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+ignore = ["RUF002", "RUF003"]

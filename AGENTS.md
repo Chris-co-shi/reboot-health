@@ -12,7 +12,7 @@
 ```text
 Architecture Status：FROZEN
 Frozen At：2026-07-12
-Active Implementation Phase：Phase 3B（当前无活动 Slice）
+Active Implementation Phase：Phase 3B Slice 2（IN_PROGRESS）
 ```
 
 自冻结日起，项目唯一事实来源是 [`docs/README.md`](docs/README.md) 中列出的权威文档。

@@ -311,3 +311,14 @@ Task 完成不删除 Platform 权威事实。Context 压缩只改变模型可见
 - 文件删除范围。
 - Fact/Plan/Risk 确认。
 - 日志脱敏和数据保留。
+
+## 17. Identity 与字段加密基线
+
+- 用户 Access/Refresh Token 为不透明高熵随机值，PostgreSQL 仅保存 SHA-256 哈希；Redis Key 也只使用 Token 哈希。
+- Refresh Token 每次轮换并建立 Family；重放撤销整个 Family并记录安全事件。
+- OIDC ID Token 与服务 Token 固定 RS256，发布 current/previous `kid` 公钥；私钥来自只读 Kubernetes Secret。
+- Authorization Code 必须短期、一次性、精确匹配 Client/Redirect URI，并验证 S256 PKCE、state 和 nonce。
+- 密码使用 Argon2id，最少 12 位，支持长密码并拒绝常见/泄露密码。
+- TOTP Secret、联系方式和第三方凭据使用版本化 AES-GCM 字段加密；恢复码和安全问题答案只保存哈希。
+- RLS 是 Application 授权后的第二道防线，事务级上下文不得泄漏到连接池后续请求。
+- Redis 故障回退 PostgreSQL，既不能绕过认证，也不能令所有有效用户无故失效。

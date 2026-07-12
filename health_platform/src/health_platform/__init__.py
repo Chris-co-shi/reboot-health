@@ -1,6 +1,8 @@
-"""Health Platform 服务包。
+"""Health Platform 顶层包。
 
-Phase 3B 仅建立框架无关的包边界，不包含业务实现。
+所属层：服务根。
+职责：暴露应用版本，不在导入时创建连接、读取 Secret 或启动线程。
+边界：业务能力必须位于纵向模块，跨模块技术能力位于 platform。
 """
 
-__all__: list[str] = []
+__version__ = "0.1.0"

@@ -23,6 +23,7 @@ Phase 3A Architecture Freeze：FROZEN
 
 Phase 3B：IN_PROGRESS
 Phase 3B Slice 1：DONE
+Phase 3B Slice 2：IN_PROGRESS
 ```
 
 2026-07-12 已完成架构冻结。未来代码、测试、部署和 Agent 提示词必须以 [`docs/`](docs/README.md) 为唯一事实来源。
@@ -147,4 +148,4 @@ JSON Store 是本地明文，只适合受控开发环境。
 
 ## Implementation status
 
-Phase 3B Slice 1 已完成仓库重组与 legacy 清理，完成记录见 [`docs/implementation/phase-3b-slice-1-repository-restructure.md`](docs/implementation/phase-3b-slice-1-repository-restructure.md)。Phase 3B 保持 `IN_PROGRESS`；后续业务、API、数据库和部署实现仍必须逐 Slice 批准。
+Phase 3B Slice 1 已完成仓库重组。Slice 2 正在建立 Health Platform 生产基础与 Identity，当前仍有生产 SQL Composition Root、完整 OAuth/Identity 和运行集成缺口；详见 [`docs/implementation/phase-3b-slice-2-health-platform-production-foundation.md`](docs/implementation/phase-3b-slice-2-health-platform-production-foundation.md)。

@@ -32,6 +32,10 @@
 | [0015](0015-context-rag-and-subagent-boundaries.md) | Context、RAG 与 Sub-Agent | 已确认 | 结构化 Summary、pgvector 和一层顺序委派 |
 | [0016](0016-sandbox-secrets-and-file-lifecycle.md) | Sandbox、Secret 与文件生命周期 | 已确认 | 不可信执行隔离、Platform Secret 中心、MinIO 和彻底删除 |
 | [0017](0017-kubernetes-six-vm-and-architecture-freeze.md) | 六 VM Kubernetes 与架构冻结 | 已确认 | 全组件 K8s、灰度、单宿主机风险和 docs-first 治理 |
+| [0018](0018-health-platform-modular-monolith.md) | Health Platform Python 模块化单体 | 已确认 | 独立 Platform 服务内部采用 FastAPI 模块化单体与 lifespan 后台线程 |
+| [0019](0019-health-platform-persistence-and-transactions.md) | Health Platform 持久化与事务 | 已确认 | SQLAlchemy/psycopg、模块 Schema、Alembic、UoW、RLS 与 Outbox |
+| [0020](0020-identity-oauth-oidc-and-session-security.md) | Identity、OAuth/OIDC 与 Session 安全 | 已确认 | 不透明用户 Token、PKCE、RS256、MFA、设备会话与恢复闭环 |
+| [0021](0021-health-platform-cache-background-and-observability.md) | 缓存、后台处理与可观测性 | 已确认 | PostgreSQL 权威、Redis 降级、Outbox 线程、OTel 与 Probe |
 
 ## Status rules
 

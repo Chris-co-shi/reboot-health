@@ -27,7 +27,7 @@ Phase 2C：DONE
 Phase 3A Architecture Freeze：FROZEN
 
 当前活动代码 Phase：Phase 3B
-当前活动 Slice：无；Slice 1 已完成，下一 Slice 尚未批准
+当前活动 Slice：Slice 2 Health Platform Production Foundation and Identity（IN_PROGRESS）
 ```
 
 自 2026-07-12 起，旧的“Phase 3A 健康领域只读工具”路线废止，不得继续使用该名称实施代码。
@@ -176,6 +176,20 @@ Primary Module：仓库目录结构、Health Platform 骨架和 legacy 清理。
 - Health Platform 编译通过；当前骨架没有单元测试用例。
 - 未执行真实 LLM、Kubernetes、数据库、Redis、MinIO 或端到端业务验收；均不属于本 Slice。
 - 未越过 Allowed Paths；未修改 `health_agent/agent/**` 或 `health_agent/tests/**`。
+
+#### Slice 2：Health Platform Production Foundation and Identity
+
+状态：`IN_PROGRESS`
+
+Primary Module：`health_platform`。
+
+实施规范：[`implementation/phase-3b-slice-2-health-platform-production-foundation.md`](implementation/phase-3b-slice-2-health-platform-production-foundation.md)
+
+目标：完成模块化单体生产基础、Identity 第一版、Audit/Outbox、缓存降级、加密、邮件、可观测性、详细设计和验证；完成后 Phase 3B 才可标记 `DONE`。
+
+当前证据：uv/Ruff/Mypy、30 项非 PostgreSQL 测试、85% 覆盖率、4 项真实 PostgreSQL 测试、Bandit、pip-audit 和 health-agent 376 项回归通过。
+
+未完成：生产 SQL Composition Root、OAuthLib/Client Credentials 完整闭环、完整限流/MFA/安全问题/权限用例、邮件 Outbox Processor、OTel 与数据库 readiness、剩余并发/审计集成测试。Slice 2 与 Phase 3B 继续保持 `IN_PROGRESS`。
 
 目标：
 

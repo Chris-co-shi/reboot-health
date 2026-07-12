@@ -26,6 +26,7 @@
 | [`PHASE_STATUS.md`](PHASE_STATUS.md) | 阶段状态、已完成证据、后续实施顺序、阻塞和已知风险 |
 | [`decisions/`](decisions/README.md) | 已批准或被替代的 Architecture Decision Records |
 | [`implementation/`](implementation/README.md) | 仅保存当前已批准实施阶段的文件级交接规范；架构冻结期无活动规范 |
+| [`design/health-platform/`](design/health-platform/README.md) | Health Platform 模块化单体、Identity、数据、安全与运行详细设计 |
 
 ## 2. 优先级
 
@@ -104,8 +105,8 @@ ADR 只解释重大决策。ADR 中已经批准的结论必须同步反映到对
 
 - `health_agent/` 中 Phase 1–2C 的 Python Runtime、Tool Loop、Session、JSON Store、lease/fencing/checkpoint/recovery 和交互式 CLI 是**已实现事实**。
 - 它们是未来独立 `health-agent` 服务的迁移基础，但当前仍不是生产部署形态。
-- `backend/`、`clients/flutter/`、`frontend/` 和 `deploy/` 是 legacy/迁移参考，不能被描述成当前可运行链路。
-- legacy 代码的删除必须等关键业务语义完成迁移并通过单独验收，不在 Architecture Freeze 中凭判断删除。
+- Slice 1 已删除 Java backend 和旧 Compose；Flutter、Vue、Mini Program 与部署目录均按冻结目标重新定位。
+- `health_platform/` 在 Slice 2 建立生产基础与 Identity；其余业务模块仍按 Feature Matrix 标记，不得把骨架描述成已实现。
 
 ## 7. 文档清理原则
 

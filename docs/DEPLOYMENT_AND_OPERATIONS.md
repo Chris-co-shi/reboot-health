@@ -300,3 +300,12 @@ maskedUserId
 - 容量、告警和日志脱敏验证。
 
 缺少任一类时，Phase 只能标记 `IMPLEMENTED_WITH_BLOCKERS`，不能标记生产完成。
+
+## 18. Health Platform 运行基线
+
+- 同一镜像/Deployment 运行 FastAPI；每 Pod 由 lifespan 启停一个非 daemon Outbox 后台线程。
+- `/health/live` 不依赖 Redis/SMTP/MinIO；`/health/ready` 检查 PostgreSQL、Alembic 兼容和后台 heartbeat；`/health/startup` 检查配置。
+- SIGTERM 停止领取新任务，等待当前短任务并在超时后安全退出。
+- Alembic 作为单独 migration Job 运行，应用启动不得自动修改生产 Schema。
+- 主密钥和 RS256 私钥只读挂载 Kubernetes Secret；要求 etcd Secret 静态加密，密钥备份与数据库备份配套。
+- Redis、SMTP、MinIO 故障默认局部降级并告警，不让全部 API Pod 自动 Not Ready。

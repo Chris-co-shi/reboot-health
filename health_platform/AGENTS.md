@@ -20,4 +20,4 @@ Health Platform 是用户身份、业务权限、Conversation、Fact、Goal、Pl
 - 不得自行创造第二套状态机、API、合同、事实源或 Plan 发布引擎。
 - 没有 `READY`/`IN_PROGRESS` Slice 和 implementation 规范时，不得实现业务、选择 Web 框架、创建数据库 Schema 或正式 Endpoint。
 
-当前目录仅为 Phase 3B 骨架，不得描述为已实现业务服务。
+当前 Phase 3B Slice 2 为 `IN_PROGRESS`。参考内存 IdentityState 仅用于 local/test；生产用例必须经 SQL UoW、同事务 Audit/Outbox 和真实 PostgreSQL 验证后才能标记完成。
