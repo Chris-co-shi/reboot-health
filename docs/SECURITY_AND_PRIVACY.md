@@ -27,6 +27,8 @@ ADMIN_OPERATOR
 SERVICE_HEALTH_AGENT
 ```
 
+其中只有 `USER`、`ADMIN_OPERATOR` 可分配给人类账号；`SERVICE_HEALTH_AGENT` 是独立服务主体。管理员使用管理能力前强制 MFA，且不获得健康业务内容修改或用户确认权限。
+
 未来 RBAC/组织模型不得改变 `userId` 数据归属和服务边界。
 
 ### health-agent

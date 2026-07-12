@@ -82,7 +82,7 @@ def test_deletion_has_seven_day_cooling_period() -> None:
 
 
 def test_high_privilege_roles_require_mfa() -> None:
-    assert Role.SYSTEM_ADMIN.requires_mfa
+    assert Role.ADMIN_OPERATOR.requires_mfa
     assert not Role.USER.requires_mfa
 
 

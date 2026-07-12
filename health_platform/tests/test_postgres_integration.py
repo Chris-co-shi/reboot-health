@@ -13,8 +13,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from testcontainers.postgres import PostgresContainer
 
-from health_platform.modules.audit.adapters.persistence import OutboxEventRow, SqlOutboxRepository
-from health_platform.modules.audit.domain.models import OutboxStatus
+from health_platform.modules.audit.adapters.persistence import (
+    AuditEventRow,
+    OutboxEventRow,
+    SqlAuditRepository,
+    SqlOutboxRepository,
+)
+from health_platform.modules.audit.domain.models import AuditEvent, OutboxStatus
 from health_platform.modules.identity.adapters.persistence import UserRow
 
 pytestmark = pytest.mark.postgres
@@ -47,6 +52,7 @@ def test_alembic_empty_database_has_identity_audit_and_one_head(migrated_url: st
     inspector = inspect(engine)
     assert "users" in inspector.get_table_names(schema="identity")
     assert "events" in inspector.get_table_names(schema="audit")
+    assert "chain_heads" in inspector.get_table_names(schema="audit")
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM alembic_version")) == 1
 
@@ -74,6 +80,24 @@ def test_identity_unique_constraint_and_transaction_rollback(migrated_url: str) 
             session.commit()
         session.rollback()
         assert session.query(UserRow).count() == 1
+
+
+def test_audit_chain_head_and_event_roll_back_together(migrated_url: str) -> None:
+    engine = create_engine(migrated_url)
+    with Session(engine) as session:
+        repository = SqlAuditRepository(session)
+        first = AuditEvent("BACKGROUND", "identity.test.first", "user", "SUCCESS")
+        first_hash = repository.append(first)
+        session.commit()
+    with Session(engine) as session:
+        repository = SqlAuditRepository(session)
+        second = AuditEvent("BACKGROUND", "identity.test.second", "user", "SUCCESS")
+        second_hash = repository.append(second)
+        session.rollback()
+    with Session(engine) as session:
+        repository = SqlAuditRepository(session)
+        assert repository.current_hash() == first_hash
+        assert session.query(AuditEventRow).filter_by(event_hash=second_hash).count() == 0
 
 
 def test_outbox_skip_locked_claim_and_expired_recovery(migrated_url: str) -> None:

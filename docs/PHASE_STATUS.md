@@ -397,3 +397,12 @@ Out of Scope
 - 要求完成报告写回本文件。
 
 不满足以上条件的提示词视为无效。
+
+## 9. Phase 3B Slice 2 本轮增量（2026-07-12）
+
+- ADR 0022 已确认并同步权威文档：人类账号角色仅 `USER / ADMIN_OPERATOR`，`SERVICE_HEALTH_AGENT` 为独立服务主体；旧五角色不自动迁移，避免静默提权。
+- 新增默认拒绝的 Principal Policy 与角色幂等变更领域方法；新增 4 项 Policy/角色单元测试。
+- 新增 0002 migration、`audit.chain_heads` 和 `SELECT FOR UPDATE` 链头更新；新增事件/链头同事务回滚 PG 测试。
+- Ruff、Mypy 通过；非 PG **34 passed, 5 deselected**。
+- PG **5 errors**：Testcontainers Reaper 端口映射探测在 PostgreSQL 启动前失败，属于环境阻塞，未形成真实 PG 通过证据。
+- 全部 Identity SQL Repository、生产 UoW/Composition Root、管理员用例、SMTP、OTel、完整 OAuth/MFA/限流及 PG 并发矩阵仍未完成；Slice 2 与 Phase 3B 保持 `IN_PROGRESS`。

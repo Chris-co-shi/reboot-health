@@ -295,7 +295,8 @@ class IdentityService:
             family = TokenFamily(user.id, session.id)
             uow.token_families.add(family)
             client = uow.oauth_clients.get(client_id)
-            assert client is not None
+            if client is None:
+                raise IdentityError("IDENTITY_OAUTH_CLIENT_INVALID", "OAuth Client 无效")
             tokens = self._issue_tokens(uow, user, session, family, client.audience)
             return tokens, user, grant.nonce
 
@@ -377,7 +378,8 @@ class IdentityService:
                 raise IdentityError("IDENTITY_INVALID_REFRESH_TOKEN", "Refresh Token 无效")
             user = self._require_user(uow, family.user_id)
             session = uow.sessions.get(family.session_id)
-            assert session is not None
+            if session is None:
+                raise IdentityError("IDENTITY_INVALID_REFRESH_TOKEN", "Refresh Token 无效")
             new_refresh = generate_token()
             try:
                 family.rotate(

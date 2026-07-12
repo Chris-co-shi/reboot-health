@@ -44,6 +44,16 @@ class AuditEventRow(Base):
     event_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
 
 
+class AuditChainHeadRow(Base):
+    """每条审计链的唯一链头；更新前必须持有行锁。"""
+
+    __tablename__ = "chain_heads"
+    __table_args__ = ({"schema": "audit"},)
+    chain_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    current_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class OutboxEventRow(Base):
     """PostgreSQL 权威 Outbox 记录。"""
 
@@ -74,8 +84,22 @@ class SqlAuditRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def append(self, event: AuditEvent) -> None:
+    def current_hash(self) -> str:
+        row = self._session.execute(
+            select(AuditChainHeadRow)
+            .where(AuditChainHeadRow.chain_id == "identity")
+            .with_for_update()
+        ).scalar_one()
+        return row.current_hash
+
+    def append(self, event: AuditEvent) -> str:
         """追加审计事件；Repository 不 commit，失败将回滚关键业务事务。"""
+        head = self._session.execute(
+            select(AuditChainHeadRow)
+            .where(AuditChainHeadRow.chain_id == "identity")
+            .with_for_update()
+        ).scalar_one()
+        object.__setattr__(event, "previous_hash", head.current_hash)
         self._session.add(
             AuditEventRow(
                 event_id=event.event_id,
@@ -97,6 +121,12 @@ class SqlAuditRepository:
                 event_hash=event.event_hash,
             )
         )
+        head.current_hash = event.event_hash
+        head.updated_at = event.occurred_at
+        return event.event_hash
+
+    def entries(self) -> list[AuditEvent]:
+        return []
 
     def enqueue(self, event: OutboxEvent) -> None:
         """与业务数据同事务写入待发布副作用。"""
@@ -121,6 +151,12 @@ class SqlOutboxRepository:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def enqueue(self, event: OutboxEvent) -> None:
+        SqlAuditRepository(self._session).enqueue(event)
+
+    def entries(self) -> list[OutboxEvent]:
+        return []
 
     def recover_expired(self, now: datetime) -> int:
         """恢复锁租约过期的 PROCESSING，保证 Pod 崩溃后任务不会永久丢失。"""

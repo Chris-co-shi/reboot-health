@@ -436,7 +436,7 @@ createdAt
 - `TokenFamily` / `RefreshToken`：每设备独立轮换链；旧 Token 重放撤销整个 Family。
 - `EmailVerification` / `PasswordRecovery` / `AuthorizationCode`：短期、一次性，数据库只保存 Token 哈希。
 - `MfaEnrollment` / `RecoveryCode`：TOTP Secret 加密，恢复码哈希且一次性。
-- `RoleAssignment` / `RelationshipGrant`：RBAC 与资源关系授权基础。
+- `RoleAssignment`：人类账号仅允许 `USER` 与 `ADMIN_OPERATOR`；服务主体通过 Principal/Actor Kind 表达，禁止进入用户角色集合。本 Slice 不实现通用 RelationshipGrant 或 ABAC。
 - `AuditEvent`：只追加、前一哈希连接，不记录 Secret 或完整敏感内容。
 - `OutboxEvent`：PENDING/PROCESSING/PUBLISHED/FAILED，支持锁租约、退避、恢复和幂等事件 ID。
 - `ExportJob` / `AccountDeletionRequest`：Identity 范围任务；跨模块导出/删除由后续模块扩展，不能伪造完成。

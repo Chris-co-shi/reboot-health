@@ -36,6 +36,7 @@
 | [0019](0019-health-platform-persistence-and-transactions.md) | Health Platform 持久化与事务 | 已确认 | SQLAlchemy/psycopg、模块 Schema、Alembic、UoW、RLS 与 Outbox |
 | [0020](0020-identity-oauth-oidc-and-session-security.md) | Identity、OAuth/OIDC 与 Session 安全 | 已确认 | 不透明用户 Token、PKCE、RS256、MFA、设备会话与恢复闭环 |
 | [0021](0021-health-platform-cache-background-and-observability.md) | 缓存、后台处理与可观测性 | 已确认 | PostgreSQL 权威、Redis 降级、Outbox 线程、OTel 与 Probe |
+| [0022](0022-first-release-principal-and-rbac.md) | 首发主体与 RBAC | 已确认 | 人类仅 USER/ADMIN_OPERATOR；SERVICE_HEALTH_AGENT 是服务主体 |
 
 ## Status rules
 

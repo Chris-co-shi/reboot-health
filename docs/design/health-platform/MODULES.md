@@ -9,3 +9,4 @@
 - `identity` 的 HTTP 接口（DTO、路由、`principal` 依赖、IdentityError handler）已迁至 `modules/identity/interfaces/http.py`；`platform/web/app.py` 仅保留 Composition Root、Probe、lifespan 和 `include_router`。
 - 顶层 `health_platform.{adapters,application,domain,interfaces,ports}` 空骨架已删除；SKELETON 模块的占位子包已删除并合并通用骨架规则至 `modules/AGENTS.md`。
 - `identity` 与 `audit` 模块保留各自专属的 `domain / application / adapters / ports / interfaces` 五层结构。
+- Identity 首发人类角色为 `USER / ADMIN_OPERATOR`，服务主体通过 Principal Actor Kind 表达；Audit 使用持久 `chain_heads` 行锁防止并发分叉。两者仍为 `PARTIAL`。

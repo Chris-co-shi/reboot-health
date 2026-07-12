@@ -87,15 +87,22 @@ class Role(StrEnum):
     """第一版单租户 RBAC 角色。"""
 
     USER = "USER"
-    HEALTH_ADVISOR = "HEALTH_ADVISOR"
-    OPERATOR = "OPERATOR"
-    AUDITOR = "AUDITOR"
-    SYSTEM_ADMIN = "SYSTEM_ADMIN"
+    ADMIN_OPERATOR = "ADMIN_OPERATOR"
 
     @property
     def requires_mfa(self) -> bool:
         """说明高权限角色进入管理能力前是否强制 MFA。"""
-        return self is not Role.USER
+        return self is Role.ADMIN_OPERATOR
+
+
+class ActorKind(StrEnum):
+    """认证主体类型；服务主体永远不是人类账号角色。"""
+
+    USER = "USER"
+    ADMIN_OPERATOR = "ADMIN_OPERATOR"
+    SERVICE_HEALTH_AGENT = "SERVICE_HEALTH_AGENT"
+    BACKGROUND = "BACKGROUND"
+    ANONYMOUS = "ANONYMOUS"
 
 
 @dataclass
@@ -162,6 +169,24 @@ class UserAccount:
         self.status = UserStatus.DISABLED
         self.permission_version += 1
         self.updated_at = utc_now()
+
+    def grant_admin_operator(self) -> bool:
+        """幂等授予唯一高权限人类角色并推进权限版本。"""
+        if Role.ADMIN_OPERATOR in self.roles:
+            return False
+        self.roles.add(Role.ADMIN_OPERATOR)
+        self.permission_version += 1
+        self.updated_at = utc_now()
+        return True
+
+    def revoke_admin_operator(self) -> bool:
+        """幂等撤销管理员角色；USER 基础角色始终保留。"""
+        if Role.ADMIN_OPERATOR not in self.roles:
+            return False
+        self.roles.remove(Role.ADMIN_OPERATOR)
+        self.permission_version += 1
+        self.updated_at = utc_now()
+        return True
 
 
 @dataclass

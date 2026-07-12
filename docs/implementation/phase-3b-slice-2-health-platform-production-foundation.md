@@ -176,3 +176,13 @@ Mypy 清零与验收收口（2026-07-12，本轮）：
 7. 5+ 项真实 PostgreSQL 集成测试（重启保留、事务回滚、审计链、Refresh 并发轮换、Redis 降级、OAuth Client 幂等、RLS 上下文清理）。
 8. `platform/security/cache.py` `ExceptionRaisingCache`（仅测试用）。
 9. Testcontainers 端口发现异常根因调查。
+
+## 首发 Principal/RBAC 与 Audit Chain Head（2026-07-12，本轮）
+
+- 新增 ADR 0022 并同步产品、领域与安全权威文档：人类账号仅 `USER / ADMIN_OPERATOR`；`SERVICE_HEALTH_AGENT` 是独立服务主体。
+- 新增确定性 `Principal`/Policy，覆盖认证、人类、管理员+MFA、服务主体、Scope、Audience、自身与自身或管理员；未知值和跨用户默认拒绝。
+- 角色授予/撤销领域操作幂等，并只在实际变化时增加 `permission_version`。
+- 新增 Alembic `20260712_0002`：`audit.chain_heads` 与批准角色数据库约束；未修改 0001。
+- `SqlAuditRepository` 使用 `SELECT FOR UPDATE` 锁定链头，事件与链头同事务更新；新增回滚一致性 PG 测试。
+- 验证：Ruff、Mypy 通过；非 PG **34 passed, 5 deselected**。PG **5 errors**，均在 PostgreSQL 启动前失败于 Testcontainers Reaper 8080 端口映射探测，未得到真实数据库结果。
+- 仍缺全部 Identity SQL Repository、生产 UoW/Composition Root、管理员 Application Use Case、SMTP Processor、OTel、完整 OAuth/MFA/限流与附件要求的 PG 并发矩阵，因此状态保持 `IN_PROGRESS`。

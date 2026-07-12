@@ -12,8 +12,8 @@
 | Token/Session | identity | 不透明 Token、轮换、重放、设备撤销 | PARTIAL | token/sessions | TokenFamily/Session | identity tokens | 哈希/即时撤销 | 是 | 单元/API/PG | 3B | health-agent Run |
 | MFA | identity | TOTP 与一次性恢复码 | PARTIAL | mfa | MfaEnrollment | identity mfa | 字段加密/哈希 | 是 | 单元/API | 3B | 短信 MFA |
 | 密码恢复 | identity | 邮件 + 固定安全问题辅助 | PARTIAL | recovery | PasswordRecovery | identity recovery | 模糊响应/哈希 | 是 | 单元/API | 3B | 客服改密 |
-| RBAC 基础 | identity | 角色、资源归属、关系授权 | PARTIAL | admin foundation | Role/Grant | identity grants | Policy + RLS | 是 | 单元/PG | 3B | Fact/Plan 授权 |
-| Audit | audit | 追加审计与哈希链 | PARTIAL | 无公共 API | AuditRecord | audit.events | 禁止敏感字段 | 自身 | 单元/PG | 3B | 审计 UI |
+| RBAC 基础 | identity | USER/ADMIN_OPERATOR 人类角色与独立服务主体 | PARTIAL | 无新增公共 API | Principal/Role/Policy | users.roles + permission_version | 默认拒绝、管理员 MFA、RLS | 部分 | 单元；PG 阻塞 | 3B | Fact/Plan 授权、ABAC、组织 |
+| Audit | audit | 追加审计、持久链头与行锁 | PARTIAL | 无公共 API | AuditRecord/ChainHead | audit.events/chain_heads | 禁止敏感字段、append-only | 自身 | 单元；PG 环境阻塞 | 3B | 审计 UI |
 | Outbox/后台 | audit/platform | 抢占、重试、恢复、heartbeat | PARTIAL | probes | OutboxEvent | audit.outbox | 独立事务 | 是 | 单元/PG | 3B | Agent Task Outbox |
 | Redis 缓存 | platform | Token/Session 短 TTL 与降级 | PARTIAL | 间接 | CacheEntry | Redis 非权威 | Token 哈希 Key | 指标 | 单元/API | 3B | Redis Streams Agent Queue |
 | 加密/密钥 | platform | 版本化 AES-GCM 与 K8s Secret Adapter | PARTIAL | 无公共 API | EncryptedValue | 密文元数据 | current/historical | 是 | 单元 | 3B | Vault/KMS |
