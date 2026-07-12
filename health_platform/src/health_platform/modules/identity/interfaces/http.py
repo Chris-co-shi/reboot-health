@@ -239,7 +239,7 @@ def build_identity_router(
     ) -> dict[str, Any]:
         """返回当前账号最小资料，不包含权限内部结构或健康数据。"""
         user_id, _ = principal_value
-        user = identity.state.users[user_id]
+        user = identity.get_user(user_id)
         return {
             "id": str(user.id),
             "email": user.email,

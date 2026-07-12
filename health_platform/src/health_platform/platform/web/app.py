@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from health_platform.modules.identity.application.in_memory_uow import InMemoryUnitOfWork
 from health_platform.modules.identity.application.service import (
     IdentityService,
     OAuthClient,
@@ -47,18 +48,19 @@ def _local_jwt_keys() -> JwtKeySet:
     return JwtKeySet(pem, "local-ephemeral")
 
 
+_DEFAULT_OAUTH_CLIENTS: tuple[OAuthClient, ...] = (
+    OAuthClient(
+        client_id="flutter-first-party",
+        redirect_uris=("reboot-health://oauth/callback",),
+        allowed_scopes=("openid", "profile", "account:read"),
+        audience="health-platform-api",
+    ),
+)
+
+
 def _register_default_oauth_clients(identity: IdentityService) -> None:
-    """注册第一方 OAuth Client；非生产环境默认注入 Flutter first-party 客户端。"""
-    if "flutter-first-party" in identity.state.oauth_clients:
-        return
-    identity.register_oauth_client(
-        OAuthClient(
-            client_id="flutter-first-party",
-            redirect_uris=("reboot-health://oauth/callback",),
-            allowed_scopes=("openid", "profile", "account:read"),
-            audience="health-platform-api",
-        )
-    )
+    """幂等注册第一方 OAuth Client；多 Pod 并发安全（UoW upsert）。"""
+    identity.ensure_oauth_clients(list(_DEFAULT_OAUTH_CLIENTS))
 
 
 def create_app(
@@ -67,7 +69,12 @@ def create_app(
     worker: BackgroundWorker | None = None,
     jwt_keys: JwtKeySet | None = None,
 ) -> FastAPI:
-    """创建无导入副作用的 FastAPI 应用，允许测试注入全部基础设施。"""
+    """创建无导入副作用的 FastAPI 应用，允许测试注入全部基础设施。
+
+    本轮 Slice 2 范围内 Composition Root 仍装配 InMemory UoW；生产 SQL
+    Adapter、Engine、Settings 数据库强校验与 lifespan Alembic 升级属于
+    下一轮切片。
+    """
     cfg = settings or Settings()
     if identity is None:
         # 静态测试密钥只允许非生产；生产由 Composition Root 读取 Kubernetes Secret。
@@ -76,10 +83,19 @@ def create_app(
         encryption = AesGcmEncryptionService(
             StaticKeyManagementAdapter("local-v1", {"local-v1": b"0" * 32})
         )
+        # 本轮 Slice 2 默认 Composition Root 装配共享 InMemory UoW；SQL Adapter
+        # 与生产数据库属于下一轮切片。每次 create_app 调用一个独立 InMemory UoW
+        # 单例，保证 HTTP 请求间状态一致。
+        shared_uow = InMemoryUnitOfWork()
+
+        def uow_factory():
+            return shared_uow
+
         identity = IdentityService(
             PasswordService(),
             encryption,
             cfg.token_pepper.get_secret_value(),
+            uow_factory=uow_factory,
             access_ttl=timedelta(seconds=cfg.access_token_ttl_seconds),
             refresh_ttl=timedelta(seconds=cfg.refresh_token_ttl_seconds),
         )

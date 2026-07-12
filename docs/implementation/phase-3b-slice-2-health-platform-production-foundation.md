@@ -114,3 +114,65 @@ Mypy 清零与验收收口（2026-07-12，本轮）：
 未完成：PostgreSQL 集成 Reaper 兼容性问题（环境失败）、SMTP Outbox Processor、OTel、数据库/Alembic readiness、并发 Refresh/幂等和审计不可变集成测试、生产 SQL Composition Root、OAuthLib/Client Credentials 完整闭环、限流/MFA/安全问题/权限用例。
 
 未完成：生产 SQL Composition Root；OAuthLib/Client Credentials/完整 Revocation；IP/设备 Redis 限流；MFA 关闭/重置；固定安全问题；权限管理用例；SMTP Outbox Processor；OTel instrumentation；数据库/Alembic readiness；并发 Refresh/幂等和审计不可变集成测试。因此 Slice 2 和 Phase 3B 保持 `IN_PROGRESS`。
+
+## Port 抽象 + InMemory UoW + IdentityService 重构（2026-07-12，本轮）
+
+### 改动范围
+
+1. **新增** `health_platform/src/health_platform/modules/identity/application/ports.py`：
+   - 声明 12 个 Protocol（`IdentityUnitOfWork`、11 个 Repository）+ 2 个 Audit/Outbox 端口。
+   - 提供领域 dataclass `AccessGrant` / `OneTimeGrant` / `MfaState` / `AuthorizationGrant` / `OAuthClient`，供 Repository / UoW / Service 共享类型。
+   - Application 层不 import SQLAlchemy / Session / 具体实现。
+
+2. **新增** `health_platform/src/health_platform/modules/identity/application/in_memory_uow.py`：
+   - `InMemoryUnitOfWork` 实现 `IdentityUnitOfWork` Protocol，附带 11 个 InMemory Repository。
+   - `InMemoryAuditRepository.append` 强制 `previous_hash = current_hash` 并通过 `object.__setattr__` 覆盖 `AuditEvent` 的只读 `previous_hash`，保证 A→B→C 顺序且不分叉。
+   - `InMemoryOAuthClientRepository.upsert` 使用 `setdefault` 实现多 Pod 幂等。
+   - `__enter__` 不重置数据，使测试与 Service 共享同一 UoW 实例（`with` 复用）。
+
+3. **重构** `health_platform/src/health_platform/modules/identity/application/service.py`：
+   - `IdentityService` 删除 `self.state`；构造器仅注入基础设施依赖。
+   - 13 个用例（`register / verify_email / login / refresh / authenticate / revoke_session / enroll_mfa / confirm_mfa / recover_mfa / request_password_reset / complete_password_reset / request_export / request_deletion / authorize / exchange_authorization_code / register_oauth_client`）统一通过 `_write` / `_read` 抽象调用 UoW。
+   - 缓存与外部副作用通过 `uow.run_after_commit(hook)` 注册，commit 后才执行；事务内禁止 Redis / SMTP / HTTP。
+   - 新增 `ensure_oauth_clients(clients)` 供 Composition Root 启动幂等注入第一方 Client。
+
+4. **修改** `health_platform/src/health_platform/modules/identity/interfaces/http.py`：
+   - `/identity/me` 改用 `identity.get_user(user_id)`，删除 `identity.state.users[user_id]` 直读。
+
+5. **修改** `health_platform/src/health_platform/platform/web/app.py`：
+   - `create_app` 默认装配共享 `InMemoryUnitOfWork`（每次 `create_app` 一个实例，保证 HTTP 请求间状态一致）。
+   - `_register_default_oauth_clients` 改用 `ensure_oauth_clients` 走 UoW `upsert`。
+
+6. **新增** `health_platform/tests/conftest.py`，更新 `health_platform/tests/test_identity_application.py`：
+   - 共享 `InMemoryUnitOfWork` 单例 fixture，使 Service 与测试断言共享同一 UoW 状态。
+   - `service.state.audits / .outbox` 改为 `uow.audit.entries() / uow.outbox.entries()`。
+
+### 验证证据
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| Format | `ruff format --check health_platform/src/health_platform health_platform/tests` | All files formatted |
+| Lint | `ruff check health_platform/src/health_platform health_platform/tests` | All checks passed! |
+| Types | `mypy --no-incremental health_platform/src/health_platform` | Success: no issues found in 34 source files（0 错误） |
+| Unit | `pytest health_platform/tests -m "not postgres" -v` | **30 passed, 4 deselected** |
+| Security | `bandit -r health_platform/src/health_platform -q` | 3 条 Low（B106 hardcoded 误报已修复；B101 assert 2 处；保留） |
+| Audit | `pip-audit -r <dependencies>` | No known vulnerabilities found |
+| health-agent | `PYTHONPATH=health_agent .venv/bin/python -m unittest discover -s health_agent/tests` | **Ran 376 tests in 3.189s, OK (skipped=2)** |
+
+### 不变量保持
+
+- HTTP DTO、错误模型、API 路径、OpenAPI 字典、Discovery/JWKS、Probe 全部不变（19 条 OpenAPI 路径如前述完整列表）。
+- `tests/test_api.py` 4 项、`test_background.py` 2 项、`test_identity_application.py` 11 项、`test_identity_domain.py` 13 项全部通过。
+- 现有 30 项非 PG 测试数量与覆盖范围不变。
+
+### 明确属下一轮切片（不在本轮）
+
+1. 9 张 SQL Repository + 双向 ORM mapper。
+2. `audit.chain_heads` 表 + `SqlChainHeadRepository` 行锁实现。
+3. Alembic `20260712_0002_audit_chain_heads_and_oauth_idempotent.py` 迁移（不修改 0001）。
+4. `platform/database/sqlalchemy_uow.py` 装配 SqlAlchemy UoW。
+5. `platform/configuration/settings.py` 生产门禁：缺数据库或密钥即 `RuntimeError`；移除 `identity_storage` 内存分支。
+6. `platform/web/app.py` 生产 Composition Root：根据 `Settings.environment` 装配 SQL UoW + Engine + SessionFactory；`lifespan` 比对 Alembic head（不调用 `create_all`）。
+7. 5+ 项真实 PostgreSQL 集成测试（重启保留、事务回滚、审计链、Refresh 并发轮换、Redis 降级、OAuth Client 幂等、RLS 上下文清理）。
+8. `platform/security/cache.py` `ExceptionRaisingCache`（仅测试用）。
+9. Testcontainers 端口发现异常根因调查。
